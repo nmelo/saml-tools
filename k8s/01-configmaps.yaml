@@ -3,15 +3,17 @@ kind: ConfigMap
 metadata:
   name: samlidp-config
   namespace: saml-tools
+  annotations:
+    description: "Updated with PKCS key format handling"
 data:
   samlidp.yaml: |
     # SAML Identity Provider Configuration
     listen_addr: ":8085"
-    base_url: "http://idp.saml-tester.com"
+    base_url: "https://idp.saml-tester.com"
     cert_file: "/app/certs/idp/cert.pem"
     key_file: "/app/certs/idp/key.pem"
     session_secret: "idp-strong-secret-key-here"
-    entity_id: "http://idp.saml-tester.com/metadata"
+    entity_id: "https://idp.saml-tester.com/metadata"
     metadata_path: "/metadata"
     sso_service_path: "/sso"
     users:
@@ -41,19 +43,24 @@ data:
   samlproxy.yaml: |
     # SAML Proxy Configuration
     listen_addr: ":8082"
-    base_url: "http://proxy.saml-tester.com"
+    base_url: "https://proxy.saml-tester.com"
     cert_file: "/app/certs/proxy/cert.pem"
     key_file: "/app/certs/proxy/key.pem"
     session_secret: "proxy-strong-secret-key-here"
-    idp_metadata_url: "http://idp.saml-tester.com/metadata"
-    idp_entity_id: "http://idp.saml-tester.com/metadata"
-    idp_sso_url: "http://idp.saml-tester.com/sso"
-    proxy_entity_id: "http://proxy.saml-tester.com/metadata"
+    # For production, use external URLs:
+    idp_metadata_url: "https://idp.saml-tester.com/metadata"
+    idp_entity_id: "https://idp.saml-tester.com/metadata"
+    idp_sso_url: "https://idp.saml-tester.com/sso"
+    # For internal development/testing:
+    # idp_metadata_url: "http://samlidp.saml-tools.svc.cluster.local:8085/metadata"
+    # idp_entity_id: "http://samlidp.saml-tools.svc.cluster.local:8085/metadata"
+    # idp_sso_url: "http://samlidp.saml-tools.svc.cluster.local:8085/sso"
+    proxy_entity_id: "https://proxy.saml-tester.com/metadata"
     debug: true
     service_providers:
       - name: "Test SP"
         entity_id: "urn:samlclient:sp"
-        acs_url: "http://client.saml-tester.com/saml/acs"
+        acs_url: "https://client.saml-tester.com/saml/acs"
         attribute_map:
           email: "email"
           firstName: "firstName"
@@ -69,11 +76,14 @@ data:
   samlclient.yaml: |
     # SAML Client Configuration
     listen_addr: ":8080"
-    base_url: "http://client.saml-tester.com"
+    base_url: "https://client.saml-tester.com"
     cert_file: "/app/certs/client/cert.pem"
     key_file: "/app/certs/client/key.pem"
     session_secret: "client-strong-secret-key-here"
     entity_id: "urn:samlclient:sp"
-    assertion_consumer_service_url: "http://client.saml-tester.com/saml/acs"
+    assertion_consumer_service_url: "https://client.saml-tester.com/saml/acs"
     metadata_path: "/saml/metadata"
-    idp_metadata_url: "http://proxy.saml-tester.com/metadata"
+    # For development, use internal service URL (more reliable within the cluster):
+    idp_metadata_url: "http://samlproxy.saml-tools.svc.cluster.local:8082/metadata"
+    # For production with proper TLS certificates, use external URL:
+    # idp_metadata_url: "https://proxy.saml-tester.com/metadata"

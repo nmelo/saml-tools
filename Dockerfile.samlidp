@@ -2,6 +2,12 @@ FROM --platform=linux/amd64 golang:1.24-alpine AS builder
 
 WORKDIR /app
 
+# Add build args for versioning
+ARG VERSION=unknown
+ARG BUILD_TIME=unknown
+ENV VERSION=${VERSION}
+ENV BUILD_TIME=${BUILD_TIME}
+
 # Copy go.mod and go.sum files to download dependencies
 COPY go.mod go.sum ./
 RUN go mod download
@@ -11,15 +17,22 @@ COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY pkg/ ./pkg/
 
+# Patch the code to handle both PKCS1 and PKCS8 formats
+RUN sed -i 's/key, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)/var privateKey *rsa.PrivateKey\n\t\t\t\n\t\t\t\/\/ Try PKCS8 format first\n\t\t\tkey, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)\n\t\t\tif err == nil {\n\t\t\t\tvar ok bool\n\t\t\t\tprivateKey, ok = key.(*rsa.PrivateKey)\n\t\t\t\tif !ok {\n\t\t\t\t\treturn nil, nil, fmt.Errorf("not an RSA private key (PKCS8)")\n\t\t\t\t}\n\t\t\t} else {\n\t\t\t\t\/\/ Fall back to PKCS1 format\n\t\t\t\tprivateKey, err = x509.ParsePKCS1PrivateKey(keyBlock.Bytes)\n\t\t\t\tif err != nil {\n\t\t\t\t\treturn nil, nil, fmt.Errorf("could not parse private key as PKCS1 or PKCS8: %v", err)\n\t\t\t\t}\n\t\t\t}/g' pkg/saml/config.go
+
+# Also patch the next few lines to use the privateKey variable directly
+RUN sed -i 's/if err != nil {\n\t\treturn nil, nil, fmt.Errorf("could not parse private key: %v", err)\n\t}\n\t\n\tprivateKey, ok := key.(\*rsa.PrivateKey)\n\tif !ok {\n\t\treturn nil, nil, fmt.Errorf("not an RSA private key")\n\t}/\/\/ No need for additional error checking here as it's handled above/g' pkg/saml/config.go
+
 # Build the application with specific architecture
+RUN echo "Building version: ${VERSION}, build time: ${BUILD_TIME}"
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/samlidp ./cmd/samlidp
 
 FROM --platform=linux/amd64 alpine:latest
 
 WORKDIR /app
 
-# Install CA certificates for HTTPS connections
-RUN apk --no-cache add ca-certificates
+# Install CA certificates and OpenSSL for HTTPS connections and key conversion
+RUN apk --no-cache add ca-certificates openssl
 
 # Copy the binary from the builder stage
 COPY --from=builder /app/bin/samlidp .

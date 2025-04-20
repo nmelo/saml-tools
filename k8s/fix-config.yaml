@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fix-script
+  namespace: saml-tools
+data:
+  fix-key.sh: |
+    #!/bin/sh
+    
+    # Create a temporary directory
+    mkdir -p /tmp/keys
+    
+    # Copy the original cert and key files
+    cp /app/certs/idp/cert.pem /tmp/keys/
+    cp /app/certs/idp/key.pem /tmp/keys/
+    
+    # Detect key format and convert if needed
+    grep -q "BEGIN PRIVATE KEY" /app/certs/idp/key.pem
+    if [ $? -eq 0 ]; then
+      echo "Detected PKCS8 format, converting to PKCS1..."
+      openssl pkcs8 -in /app/certs/idp/key.pem -nocrypt -out /tmp/keys/key.pem
+    else
+      echo "Key appears to be in PKCS1 format already."
+    fi
+    
+    # Replace the original keys with our converted ones
+    cp /tmp/keys/cert.pem /app/certs/idp/cert.pem
+    cp /tmp/keys/key.pem /app/certs/idp/key.pem
+    
+    # Set proper permissions
+    chmod 600 /app/certs/idp/key.pem
+    echo "Key conversion complete."

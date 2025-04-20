@@ -15,10 +15,38 @@ spec:
       labels:
         app: samlidp
     spec:
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+      - name: key-converter
+        image: alpine:latest
+        securityContext:
+          runAsUser: 0  # Run as root for apt operations
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Checking key format..."
+          mkdir -p /tmp/certs
+          cat /certs/tls.crt > /tmp/certs/cert.pem
+          
+          # Extract the key and convert it to PKCS1 format if needed
+          echo "Converting key to PKCS1 format..."
+          apk add --no-cache openssl
+          cat /certs/tls.key > /tmp/certs/key_orig.pem
+          openssl rsa -in /tmp/certs/key_orig.pem -out /tmp/certs/key.pem
+          rm /tmp/certs/key_orig.pem
+          
+          chmod 600 /tmp/certs/key.pem
+          echo "Certificate and key prepared in /tmp/certs/"
+        volumeMounts:
+        - name: cert-volume
+          mountPath: /certs/
+        - name: converted-certs
+          mountPath: /tmp/certs/
       containers:
       - name: samlidp
         image: registry.digitalocean.com/samltools/samlidp:latest
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         ports:
         - containerPort: 8085
         env:
@@ -27,11 +55,11 @@ spec:
         volumeMounts:
         - name: config-volume
           mountPath: /app/configs/
-        - name: cert-volume
+        - name: converted-certs
           mountPath: /app/certs/idp/
         readinessProbe:
           httpGet:
-            path: /metadata
+            path: /
             port: 8085
           initialDelaySeconds: 10
           periodSeconds: 5
@@ -48,7 +76,9 @@ spec:
           name: samlidp-config
       - name: cert-volume
         secret:
-          secretName: idp-certs
+          secretName: idp-tls-cert
+      - name: converted-certs
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
