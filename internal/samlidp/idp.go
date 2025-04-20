@@ -466,9 +466,12 @@ func (idp *SAMLIdP) handleLogin(w http.ResponseWriter, r *http.Request, _ httpro
 
 	// Encode the response
 	var respBuf []byte
-	respEnc := xml.NewEncoder(w)
-	if err := respEnc.Encode(samlResponse); err == nil {
-		respBuf, _ = xml.Marshal(samlResponse)
+	var err error
+	// Don't write to the ResponseWriter directly, only use it for the final form
+	respBuf, err = xml.Marshal(samlResponse)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to marshal SAML response: %v", err), http.StatusInternalServerError)
+		return
 	}
 
 	responseb64 := base64.StdEncoding.EncodeToString(respBuf)
@@ -497,8 +500,8 @@ func (idp *SAMLIdP) handleLogin(w http.ResponseWriter, r *http.Request, _ httpro
 
 	// Remove the request from tracking
 	delete(idp.Requests, requestID)
-
-	// Render the POST form
+	
+	// Write the form to the response
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(postForm))
 }
