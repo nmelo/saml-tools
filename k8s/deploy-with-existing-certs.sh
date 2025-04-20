@@ -80,19 +80,25 @@ sed -i "" "s|image: .*samlclient:latest|image: $REGISTRY/$REGISTRY_NAME/samlclie
 echo "Applying ConfigMaps with HTTPS URLs..."
 kubectl apply -f "$PROJECT_DIR/k8s/01-configmaps-https.yaml"
 
-# Deploy the components sequentially
+# Deploy the components sequentially with force redeploy
 echo "Deploying IdP..."
 kubectl apply -f "$PROJECT_DIR/k8s/02-samlidp.yaml"
+# Force redeploy by restarting the deployment
+kubectl rollout restart deployment/samlidp -n $NAMESPACE
 echo "Waiting for IdP to be ready..."
 kubectl rollout status deployment/samlidp -n $NAMESPACE
 
 echo "Deploying Proxy..."
 kubectl apply -f "$PROJECT_DIR/k8s/03-samlproxy.yaml"
+# Force redeploy by restarting the deployment
+kubectl rollout restart deployment/samlproxy -n $NAMESPACE
 echo "Waiting for Proxy to be ready..."
 kubectl rollout status deployment/samlproxy -n $NAMESPACE
 
 echo "Deploying Client..."
 kubectl apply -f "$PROJECT_DIR/k8s/04-samlclient.yaml"
+# Force redeploy by restarting the deployment
+kubectl rollout restart deployment/samlclient -n $NAMESPACE
 echo "Waiting for Client to be ready..."
 kubectl rollout status deployment/samlclient -n $NAMESPACE
 
