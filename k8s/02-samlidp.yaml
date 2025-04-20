@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: samlidp
+  namespace: saml-tools
+  labels:
+    app: samlidp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: samlidp
+  template:
+    metadata:
+      labels:
+        app: samlidp
+    spec:
+      containers:
+      - name: samlidp
+        image: registry.digitalocean.com/samltools/samlidp:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8085
+        env:
+        - name: CONFIG_FILE
+          value: "/app/configs/samlidp.yaml"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/configs/
+        - name: cert-volume
+          mountPath: /app/certs/idp/
+        readinessProbe:
+          httpGet:
+            path: /metadata
+            port: 8085
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+      volumes:
+      - name: config-volume
+        configMap:
+          name: samlidp-config
+      - name: cert-volume
+        secret:
+          secretName: idp-certs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: samlidp
+  namespace: saml-tools
+spec:
+  selector:
+    app: samlidp
+  ports:
+  - port: 8085
+    targetPort: 8085
+    name: http
+  type: ClusterIP

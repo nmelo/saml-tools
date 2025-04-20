@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: samlidp-config
+  namespace: saml-tools
+data:
+  samlidp.yaml: |
+    # SAML Identity Provider Configuration
+    listen_addr: ":8085"
+    base_url: "https://idp.saml-tester.com"
+    cert_file: "/app/certs/idp/cert.pem"
+    key_file: "/app/certs/idp/key.pem"
+    session_secret: "idp-strong-secret-key-here"
+    entity_id: "https://idp.saml-tester.com/metadata"
+    metadata_path: "/metadata"
+    sso_service_path: "/sso"
+    users:
+      - username: "admin"
+        password: "admin123"
+        attributes:
+          email: "admin@example.com"
+          firstName: "Admin"
+          lastName: "User"
+          roles: ["admin", "user"]
+          userId: "1001"
+      - username: "user"
+        password: "user123"
+        attributes:
+          email: "user@example.com"
+          firstName: "Regular"
+          lastName: "User"
+          roles: ["user"]
+          userId: "1002"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: samlproxy-config
+  namespace: saml-tools
+data:
+  samlproxy.yaml: |
+    # SAML Proxy Configuration
+    listen_addr: ":8082"
+    base_url: "https://proxy.saml-tester.com"
+    cert_file: "/app/certs/proxy/cert.pem"
+    key_file: "/app/certs/proxy/key.pem"
+    session_secret: "proxy-strong-secret-key-here"
+    idp_metadata_url: "https://idp.saml-tester.com/metadata"
+    idp_entity_id: "https://idp.saml-tester.com/metadata"
+    idp_sso_url: "https://idp.saml-tester.com/sso"
+    proxy_entity_id: "https://proxy.saml-tester.com/metadata"
+    debug: true
+    service_providers:
+      - name: "Test SP"
+        entity_id: "urn:samlclient:sp"
+        acs_url: "https://client.saml-tester.com/saml/acs"
+        attribute_map:
+          email: "email"
+          firstName: "firstName"
+          lastName: "lastName"
+          roles: "roles"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: samlclient-config
+  namespace: saml-tools
+data:
+  samlclient.yaml: |
+    # SAML Client Configuration
+    listen_addr: ":8080"
+    base_url: "https://client.saml-tester.com"
+    cert_file: "/app/certs/client/cert.pem"
+    key_file: "/app/certs/client/key.pem"
+    session_secret: "client-strong-secret-key-here"
+    entity_id: "urn:samlclient:sp"
+    assertion_consumer_service_url: "https://client.saml-tester.com/saml/acs"
+    metadata_path: "/saml/metadata"
+    idp_metadata_url: "https://proxy.saml-tester.com/metadata"

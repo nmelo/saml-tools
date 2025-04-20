@@ -1,0 +1,33 @@
+# SAML Proxy Configuration
+
+# Server configuration
+listen_addr: ":8082"
+base_url: "http://localhost:8082"
+cert_file: "./certs/proxy/cert.pem"
+key_file: "./certs/proxy/key.pem"
+session_secret: "a-strong-random-secret-key-here"
+
+# Identity Provider configuration
+idp_metadata_url: "http://localhost:8085/metadata"
+idp_entity_id: "http://localhost:8085/metadata"
+idp_sso_url: "http://localhost:8085/sso"
+
+# Proxy configuration
+proxy_entity_id: "http://localhost:8082/metadata"
+
+# Debug mode
+debug: true
+
+# Service Provider configurations
+service_providers:
+  - name: "SAML Client"
+    entity_id: "urn:samlclient:sp"
+    acs_url: "http://localhost:8080/saml/acs"
+    metadata_xml_url: "http://localhost:8080/saml/metadata"
+    attribute_map:
+      "email": "email"
+      "username": "username"
+      "firstName": "firstName"
+      "lastName": "lastName"
+      "userId": "userId"
+      "roles": "roles"

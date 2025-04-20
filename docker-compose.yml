@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  samlidp:
+    build:
+      context: .
+      dockerfile: Dockerfile.samlidp
+    ports:
+      - "8085:8085"
+    volumes:
+      - ./configs:/app/configs
+      - ./certs/idp:/app/certs/idp
+    networks:
+      - saml-network
+    environment:
+      - CONFIG_FILE=/app/configs/samlidp.yaml
+
+  samlproxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.samlproxy
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./configs:/app/configs
+      - ./certs/proxy:/app/certs/proxy
+    networks:
+      - saml-network
+    environment:
+      - CONFIG_FILE=/app/configs/samlproxy.yaml
+    depends_on:
+      - samlidp
+
+  samlclient:
+    build:
+      context: .
+      dockerfile: Dockerfile.samlclient
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./configs:/app/configs
+      - ./certs/client:/app/certs/client
+    networks:
+      - saml-network
+    environment:
+      - CONFIG_FILE=/app/configs/samlclient.yaml
+    depends_on:
+      - samlproxy
+
+networks:
+  saml-network:
+    driver: bridge

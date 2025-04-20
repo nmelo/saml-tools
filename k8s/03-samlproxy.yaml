@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: samlproxy
+  namespace: saml-tools
+  labels:
+    app: samlproxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: samlproxy
+  template:
+    metadata:
+      labels:
+        app: samlproxy
+    spec:
+      containers:
+      - name: samlproxy
+        image: registry.digitalocean.com/samltools/samlproxy:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8082
+        env:
+        - name: CONFIG_FILE
+          value: "/app/configs/samlproxy.yaml"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/configs/
+        - name: cert-volume
+          mountPath: /app/certs/proxy/
+        readinessProbe:
+          httpGet:
+            path: /metadata
+            port: 8082
+          initialDelaySeconds: 15
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+      volumes:
+      - name: config-volume
+        configMap:
+          name: samlproxy-config
+      - name: cert-volume
+        secret:
+          secretName: proxy-certs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: samlproxy
+  namespace: saml-tools
+spec:
+  selector:
+    app: samlproxy
+  ports:
+  - port: 8082
+    targetPort: 8082
+    name: http
+  type: ClusterIP

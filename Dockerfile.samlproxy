@@ -1,0 +1,37 @@
+FROM --platform=linux/amd64 golang:1.24-alpine AS builder
+
+WORKDIR /app
+
+# Copy go.mod and go.sum files to download dependencies
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy the source code
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+COPY pkg/ ./pkg/
+
+# Build the application with specific architecture
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/samlproxy ./cmd/samlproxy
+
+FROM --platform=linux/amd64 alpine:latest
+
+WORKDIR /app
+
+# Install CA certificates for HTTPS connections
+RUN apk --no-cache add ca-certificates
+
+# Copy the binary from the builder stage
+COPY --from=builder /app/bin/samlproxy .
+
+# Create a directory for configs and certificates
+RUN mkdir -p /app/configs /app/certs/proxy
+
+# Default config file path - can be overridden with docker volume mounts
+ENV CONFIG_FILE=/app/configs/samlproxy.yaml
+
+# Expose the default port
+EXPOSE 8082
+
+# Run the samlproxy
+ENTRYPOINT ["sh", "-c", "./samlproxy -config $CONFIG_FILE"]

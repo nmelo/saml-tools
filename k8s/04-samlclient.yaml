@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: samlclient
+  namespace: saml-tools
+  labels:
+    app: samlclient
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: samlclient
+  template:
+    metadata:
+      labels:
+        app: samlclient
+    spec:
+      containers:
+      - name: samlclient
+        image: registry.digitalocean.com/samltools/samlclient:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+        env:
+        - name: CONFIG_FILE
+          value: "/app/configs/samlclient.yaml"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/configs/
+        - name: cert-volume
+          mountPath: /app/certs/client/
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+      volumes:
+      - name: config-volume
+        configMap:
+          name: samlclient-config
+      - name: cert-volume
+        secret:
+          secretName: client-certs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: samlclient
+  namespace: saml-tools
+spec:
+  selector:
+    app: samlclient
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+  type: ClusterIP

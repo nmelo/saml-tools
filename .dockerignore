@@ -1,0 +1,37 @@
+# Git
+.git
+.gitignore
+
+# Binaries
+/bin/
+
+# IDE files
+.idea/
+.vscode/
+
+# Test files
+*_test.go
+
+# Certificate files (will be mounted as volumes)
+certs/
+
+# Original project directories (we only need cmd/, internal/ and pkg/)
+samlproxy/
+samlidp/
+samlclient/
+
+# Docker files
+Dockerfile*
+docker-compose.yml
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+
+# Log files
+*.log
+
+# Markdown and documentation
+*.md
+docs/
