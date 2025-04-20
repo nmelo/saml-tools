@@ -51,22 +51,22 @@ docker push $REGISTRY/$REGISTRY_NAME/samlclient:latest
 echo "Creating Kubernetes namespace..."
 kubectl apply -f "$PROJECT_DIR/k8s/00-namespace.yaml"
 
-# Check if Let's Encrypt certificates exist
-echo "Checking for existing Let's Encrypt certificates..."
+# Check if production certificates exist
+echo "Checking for existing production certificates..."
 client_cert=$(kubectl get secret client-tls-cert -n $NAMESPACE -o name 2>/dev/null || echo "")
 proxy_cert=$(kubectl get secret proxy-tls-cert -n $NAMESPACE -o name 2>/dev/null || echo "")
 idp_cert=$(kubectl get secret idp-tls-cert -n $NAMESPACE -o name 2>/dev/null || echo "")
 
 if [ -z "$client_cert" ] || [ -z "$proxy_cert" ] || [ -z "$idp_cert" ]; then
   echo "One or more required TLS certificates are missing."
-  echo "Please make sure Let's Encrypt certificates have been set up using setup-dns01-certificates.sh"
-  echo "Missing certificates:"
-  [ -z "$client_cert" ] && echo "- client-tls-cert"
-  [ -z "$proxy_cert" ] && echo "- proxy-tls-cert"
-  [ -z "$idp_cert" ] && echo "- idp-tls-cert"
+  echo "Please make sure production certificates have been created and are available in the cluster."
+  echo "Required certificates:"
+  echo "- client-tls-cert (client.saml-tester.com): ${client_cert:-MISSING}"
+  echo "- proxy-tls-cert (proxy.saml-tester.com): ${proxy_cert:-MISSING}"
+  echo "- idp-tls-cert (idp.saml-tester.com): ${idp_cert:-MISSING}"
   exit 1
 else
-  echo "Found all required TLS certificates."
+  echo "Found all required production TLS certificates."
 fi
 
 # Update image names in deployment files
@@ -122,9 +122,9 @@ if [[ -n "$DOMAIN_CLIENT" && -n "$DOMAIN_PROXY" && -n "$DOMAIN_IDP" ]]; then
   echo "Domain names updated successfully."
 fi
 
-# Deploy the Ingress with TLS
-echo "Applying Ingress with TLS..."
-kubectl apply -f "$INGRESS_FILE"
+# Deploy the Ingress with production TLS certificates
+echo "Applying Ingress with production TLS certificates..."
+kubectl apply -f "$PROJECT_DIR/k8s/05-ingress-prod-tls.yaml"
 
 echo "Deployment complete!"
 echo "=================="
