@@ -28,10 +28,21 @@ func NewSAMLClient(configFile string) (*SAMLClient, error) {
 		return nil, err
 	}
 
-	// Create session store
-	sessionStore := sessions.NewCookieStore([]byte(config.SessionSecret))
+	// Create session store with more permissive options for testing
+	// Use stable session key for testing
+	sessionKey := []byte(config.SessionSecret)
+	if len(sessionKey) < 32 {
+		// Pad the session key if it's too short
+		paddedKey := make([]byte, 32)
+		copy(paddedKey, sessionKey)
+		sessionKey = paddedKey
+	}
+	
+	sessionStore := sessions.NewCookieStore(sessionKey)
 	sessionStore.Options.HttpOnly = true
-	sessionStore.Options.Secure = !(config.ListenAddr == ":80" || config.ListenAddr == ":8080")
+	sessionStore.Options.Secure = false  // Disable for local testing
+	sessionStore.Options.Path = "/"      // Ensure cookies are available on all paths
+	sessionStore.Options.MaxAge = 3600   // 1 hour session
 
 	// Create SAML client
 	client := &SAMLClient{
