@@ -53,7 +53,6 @@ const (
 // Simple in-memory session store as fallback - not production ready but works for testing
 var (
 	//authenticatedIPs = make(map[string]bool)
-	authBypassToken = "bypass-" + uuid.New().String() // A unique token to bypass auth for testing
 )
 
 // Helper functions for session handling
@@ -359,22 +358,16 @@ func (sc *SAMLClient) handleProfile(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("Profile handler called by %s\n", r.RemoteAddr)
 	fmt.Printf("Method: %s, Path: %s\n", r.Method, r.URL.Path)
 
-	// Check for testing bypass token in URL
-	token := r.URL.Query().Get("token")
-	if token == authBypassToken {
-		fmt.Printf("Auth bypass token used, granting access\n")
-	} else {
-		// Check referrer as LAST RESORT - if coming directly from ACS, assume authenticated
-		// NOTE: This is NOT secure for production, just for testing!
-		referer := r.Header.Get("Referer")
-		fmt.Printf("Referer: %s\n", referer)
-		if strings.Contains(referer, "/saml/acs") {
-			fmt.Printf("Coming directly from ACS endpoint, granting access\n")
-		} else if !sc.isAuthenticated(r) {
-			fmt.Printf("User not authenticated, redirecting to home\n")
-			http.Redirect(w, r, "/", http.StatusFound)
-			return
-		}
+	// Check referrer as LAST RESORT - if coming directly from ACS, assume authenticated
+	// NOTE: This is NOT secure for production, just for testing!
+	referer := r.Header.Get("Referer")
+	fmt.Printf("Referer: %s\n", referer)
+	if strings.Contains(referer, "/saml/acs") {
+		fmt.Printf("Coming directly from ACS endpoint, granting access\n")
+	} else if !sc.isAuthenticated(r) {
+		fmt.Printf("User not authenticated, redirecting to home\n")
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
 	}
 
 	fmt.Printf("User is authenticated, showing profile\n")
@@ -580,9 +573,7 @@ func (sc *SAMLClient) SetupRoutes() http.Handler {
 			//authenticatedIPs[clientIP] = true
 			//fmt.Printf("Added IP %s to authenticated IPs list\n", clientIP)
 
-			// Print the auth bypass token for testing
-			//fmt.Printf("AUTH BYPASS TOKEN: %s\nUse this token in the URL: http://localhost:8080/profile?token=%s\n",
-			//	authBypassToken, authBypassToken)
+			// Authentication successful
 
 			http.Redirect(w, r, "/profile", http.StatusFound)
 			return
