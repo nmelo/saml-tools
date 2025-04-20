@@ -581,8 +581,8 @@ func (sc *SAMLClient) SetupRoutes() http.Handler {
 			//fmt.Printf("Added IP %s to authenticated IPs list\n", clientIP)
 
 			// Print the auth bypass token for testing
-			fmt.Printf("AUTH BYPASS TOKEN: %s\nUse this token in the URL: http://localhost:8080/profile?token=%s\n",
-				authBypassToken, authBypassToken)
+			//fmt.Printf("AUTH BYPASS TOKEN: %s\nUse this token in the URL: http://localhost:8080/profile?token=%s\n",
+			//	authBypassToken, authBypassToken)
 
 			http.Redirect(w, r, "/profile", http.StatusFound)
 			return

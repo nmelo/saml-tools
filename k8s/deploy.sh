@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script to deploy SAML tools to Digital Ocean Kubernetes with existing Let's Encrypt certificates
+# Script to deploy SAML tools to Digital Ocean Kubernetes with hard pod reset
 set -e
 
 # Variables
@@ -80,51 +80,55 @@ sed -i "" "s|image: .*samlclient:latest|image: $REGISTRY/$REGISTRY_NAME/samlclie
 echo "Applying ConfigMaps with HTTPS URLs..."
 kubectl apply -f "$PROJECT_DIR/k8s/01-configmaps-https.yaml"
 
-# Deploy the components sequentially with force redeploy
+# HARD RESET DEPLOYMENT STRATEGY
+# Delete all deployments first and wait for pods to terminate
+echo "Deleting existing deployments..."
+
+# Delete IdP deployment and wait for pods to terminate
+echo "Deleting IdP deployment..."
+kubectl delete deployment/samlidp -n $NAMESPACE --ignore-not-found=true
+echo "Waiting for IdP pods to terminate..."
+while kubectl get pods -n $NAMESPACE -l app=samlidp 2>/dev/null | grep -q Running; do
+  echo "IdP pods still running, waiting..."
+  sleep 3
+done
+echo "All IdP pods terminated"
+
+# Delete Proxy deployment and wait for pods to terminate
+echo "Deleting Proxy deployment..."
+kubectl delete deployment/samlproxy -n $NAMESPACE --ignore-not-found=true
+echo "Waiting for Proxy pods to terminate..."
+while kubectl get pods -n $NAMESPACE -l app=samlproxy 2>/dev/null | grep -q Running; do
+  echo "Proxy pods still running, waiting..."
+  sleep 3
+done
+echo "All Proxy pods terminated"
+
+# Delete Client deployment and wait for pods to terminate
+echo "Deleting Client deployment..."
+kubectl delete deployment/samlclient -n $NAMESPACE --ignore-not-found=true
+echo "Waiting for Client pods to terminate..."
+while kubectl get pods -n $NAMESPACE -l app=samlclient 2>/dev/null | grep -q Running; do
+  echo "Client pods still running, waiting..."
+  sleep 3
+done
+echo "All Client pods terminated"
+
+# Deploy the components sequentially
 echo "Deploying IdP..."
 kubectl apply -f "$PROJECT_DIR/k8s/02-samlidp.yaml"
-# Force redeploy by restarting the deployment
-kubectl rollout restart deployment/samlidp -n $NAMESPACE
 echo "Waiting for IdP to be ready..."
-kubectl rollout status deployment/samlidp -n $NAMESPACE
+kubectl wait --for=condition=available --timeout=120s deployment/samlidp -n $NAMESPACE
 
 echo "Deploying Proxy..."
 kubectl apply -f "$PROJECT_DIR/k8s/03-samlproxy.yaml"
-# Force redeploy by restarting the deployment
-kubectl rollout restart deployment/samlproxy -n $NAMESPACE
 echo "Waiting for Proxy to be ready..."
-kubectl rollout status deployment/samlproxy -n $NAMESPACE
+kubectl wait --for=condition=available --timeout=120s deployment/samlproxy -n $NAMESPACE
 
 echo "Deploying Client..."
 kubectl apply -f "$PROJECT_DIR/k8s/04-samlclient.yaml"
-# Force redeploy by restarting the deployment
-kubectl rollout restart deployment/samlclient -n $NAMESPACE
 echo "Waiting for Client to be ready..."
-kubectl rollout status deployment/samlclient -n $NAMESPACE
-
-# Update domain names in ingress if specified
-INGRESS_FILE="$PROJECT_DIR/k8s/05-ingress-tls.yaml"
-if [[ -n "$DOMAIN_CLIENT" && -n "$DOMAIN_PROXY" && -n "$DOMAIN_IDP" ]]; then
-  echo "Updating domain names in ingress file..."
-  
-  # Create a temporary file
-  temp_file=$(mktemp)
-  
-  # Update the ingress hosts
-  cat "$INGRESS_FILE" | \
-    sed "s/client.saml-tester.com/$DOMAIN_CLIENT/g" | \
-    sed "s/proxy.saml-tester.com/$DOMAIN_PROXY/g" | \
-    sed "s/idp.saml-tester.com/$DOMAIN_IDP/g" > "$temp_file"
-  
-  # Replace the original file
-  mv "$temp_file" "$INGRESS_FILE"
-  
-  echo "Domain names updated successfully."
-fi
-
-# Deploy the Ingress with production TLS certificates
-echo "Applying Ingress with production TLS certificates..."
-kubectl apply -f "$PROJECT_DIR/k8s/05-ingress-prod-tls.yaml"
+kubectl wait --for=condition=available --timeout=120s deployment/samlclient -n $NAMESPACE
 
 echo "Deployment complete!"
 echo "=================="
