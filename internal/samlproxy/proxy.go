@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -44,6 +45,7 @@ type SAMLRequest struct {
 	ServiceProvider     *ServiceProviderConfig
 	IdentityProvider    *IdentityProviderConfig  // The IdP selected for this request
 	RequestID           string
+	OriginalRequestID   string                   // Original SP request ID (for InResponseTo)
 	ACSUrl              string
 	CreatedAt           time.Time                // When the request was created
 }
@@ -68,6 +70,7 @@ type ServiceProviderConfig struct {
 	ACSUrl         string            `yaml:"acs_url"`
 	MetadataXMLUrl string            `yaml:"metadata_xml_url"`
 	AttributeMap   map[string]string `yaml:"attribute_map"`
+	DefaultIdP     string            `yaml:"default_idp"`     // ID of the default IdP to use, or empty for prompt
 }
 
 // IdentityProviderConfig represents configuration for an identity provider
@@ -93,66 +96,118 @@ body {
     background-color: #f5f5f5;
 }
 .container {
-    max-width: 800px;
+    max-width: 1200px;
     margin: 0 auto;
     background-color: #fff;
     padding: 20px;
     border-radius: 8px;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
+h1, h2, h3 {
+    color: #333;
+}
 h1 {
     text-align: center;
-    color: #333;
     margin-bottom: 20px;
 }
 .idp-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 20px;
+    grid-template-columns: repeat(auto-fill, minmax(550px, 1fr));
+    gap: 30px;
     margin-top: 30px;
 }
 .idp-card {
     border: 1px solid #ddd;
-    border-radius: 4px;
+    border-radius: 8px;
     padding: 20px;
     transition: transform 0.2s, box-shadow 0.2s;
     background-color: #fff;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    text-decoration: none;
     color: #333;
+    text-decoration: none;
+    display: block;
 }
 .idp-card:hover {
     transform: translateY(-5px);
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
 }
+.idp-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 15px;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 15px;
+}
 .idp-logo {
     max-width: 100px;
     max-height: 60px;
-    margin-bottom: 15px;
+    margin-right: 20px;
+}
+.idp-title {
+    flex: 1;
 }
 .idp-name {
     font-weight: bold;
-    font-size: 18px;
-    margin-bottom: 10px;
+    font-size: 20px;
+    margin-bottom: 5px;
+    color: #2c3e50;
 }
 .idp-description {
-    text-align: center;
     font-size: 14px;
     color: #666;
+    margin-bottom: 10px;
+}
+.idp-params {
+    background-color: #f8f9fa;
+    border-radius: 6px;
+    padding: 15px;
+    margin-top: 15px;
+    font-size: 14px;
+}
+.param-group {
+    margin-bottom: 15px;
+}
+.param-label {
+    font-weight: bold;
+    color: #495057;
+    margin-bottom: 5px;
+    display: block;
+}
+.param-value {
+    font-family: monospace;
+    background-color: #fff;
+    padding: 6px 10px;
+    border-radius: 4px;
+    border: 1px solid #e9ecef;
+    color: #495057;
+    word-break: break-all;
 }
 .btn {
     display: inline-block;
-    padding: 10px 15px;
+    width: 100%;
+    padding: 12px 20px;
     background-color: #007bff;
     color: white;
     border-radius: 4px;
     text-decoration: none;
-    margin-top: 15px;
+    margin-top: 20px;
+    text-align: center;
+    font-weight: bold;
+    transition: background-color 0.2s;
 }
 .btn:hover {
     background-color: #0069d9;
+}
+.badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: bold;
+    margin-left: 10px;
+}
+.badge-default {
+    background-color: #28a745;
+    color: white;
 }
 `
 
@@ -217,6 +272,9 @@ func NewSAMLProxy(configFile string) (*SAMLProxy, error) {
 
 // ServeHTTP implements the http.Handler interface for the SAML proxy
 func (sp *SAMLProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Always enable debug mode to diagnose issues
+	sp.Config.Debug = true
+
 	if sp.Config.Debug {
 		log.Printf("Request: %s %s", r.Method, r.URL.Path)
 	}
@@ -224,6 +282,8 @@ func (sp *SAMLProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/metadata":
 		sp.handleMetadata(w, r)
+	case "/status":
+		sp.handleStatus(w, r)
 	case "/saml/sso":
 		sp.handleSAMLRequest(w, r)
 	case "/saml/acs":
@@ -234,6 +294,8 @@ func (sp *SAMLProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sp.handleCompleteRequest(w, r)
 	case "/assets/css/style.css":
 		sp.serveStaticCSS(w, r)
+	case "/api/save-sp-config":
+		sp.handleSaveServiceProviderConfig(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -245,55 +307,699 @@ func (sp *SAMLProxy) serveStaticCSS(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(idpSelectionCSS))
 }
 
-// Generates metadata for the proxy to be used by Service Providers
+// SaveConfig saves the current configuration to the specified file
+func (sp *SAMLProxy) SaveConfig(configFile string) error {
+	// Marshal the config to YAML
+	configData, err := yaml.Marshal(sp.Config)
+	if err != nil {
+		return fmt.Errorf("could not marshal config to YAML: %v", err)
+	}
+
+	// Create a backup of the existing file if it exists
+	if _, err := os.Stat(configFile); err == nil {
+		// File exists, create a backup
+		backupFile := configFile + ".bak"
+
+		// Read the existing file
+		existingData, err := os.ReadFile(configFile)
+		if err != nil {
+			return fmt.Errorf("could not read existing config file for backup: %v", err)
+		}
+
+		// Write the backup file
+		if err := os.WriteFile(backupFile, existingData, 0644); err != nil {
+			return fmt.Errorf("could not create backup config file: %v", err)
+		}
+
+		fmt.Printf("Created backup of config file at %s\n", backupFile)
+	}
+
+	// Write to the file
+	if err := os.WriteFile(configFile, configData, 0644); err != nil {
+		return fmt.Errorf("could not write config file: %v", err)
+	}
+
+	return nil
+}
+
+// Handle saving the Service Provider configuration
+func (sp *SAMLProxy) handleSaveServiceProviderConfig(w http.ResponseWriter, r *http.Request) {
+	// Only allow POST requests
+	if r.Method != "POST" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		w.Write([]byte(`{"success": false, "message": "Method not allowed"}`))
+		return
+	}
+
+	// Parse the form data
+	if err := r.ParseForm(); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"success": false, "message": "Error parsing form data"}`))
+		return
+	}
+
+	// Get the service provider ID and the default IdP ID
+	spID := r.FormValue("sp_id")
+	defaultIdPID := r.FormValue("default_idp_id")
+
+	// Always show this debug info for important operations
+	fmt.Printf("\n==== SERVICE PROVIDER CONFIG UPDATE ====\n")
+	fmt.Printf("Received SP config change: SP Entity ID=%s, Default IdP ID=%s\n", spID, defaultIdPID)
+
+	// Show all SPs for comparison
+	fmt.Println("Currently configured Service Providers:")
+	for i, provider := range sp.Config.ServiceProviders {
+		fmt.Printf("[%d] EntityID: %s, Name: %s, DefaultIdP: %s\n",
+			i, provider.EntityID, provider.Name, provider.DefaultIdP)
+	}
+
+	// Show all IdPs for comparison
+	fmt.Println("Currently configured Identity Providers:")
+	for i, idp := range sp.Config.IdentityProviders {
+		fmt.Printf("[%d] ID: %s, Name: %s, EntityID: %s\n",
+			i, idp.ID, idp.Name, idp.EntityID)
+	}
+
+	// Print all service provider EntityIDs for debugging
+	if sp.Config.Debug {
+		fmt.Println("Available Service Provider EntityIDs:")
+		for i, provider := range sp.Config.ServiceProviders {
+			fmt.Printf("[%d] %s\n", i, provider.EntityID)
+		}
+	}
+
+	// URL-decode the service provider ID (in case it was encoded in the form data)
+	decodedSpID, err := url.QueryUnescape(spID)
+	if err != nil {
+		if sp.Config.Debug {
+			fmt.Printf("Error decoding SP ID '%s': %v\n", spID, err)
+		}
+		// Continue with the original ID if decoding fails
+		decodedSpID = spID
+	} else if decodedSpID != spID {
+		if sp.Config.Debug {
+			fmt.Printf("Decoded SP ID: '%s' to '%s'\n", spID, decodedSpID)
+		}
+		spID = decodedSpID
+	}
+
+	// Additional debug
+	if sp.Config.Debug {
+		fmt.Printf("Looking for Service Provider with Entity ID: '%s'\n", spID)
+	}
+
+	// Validate the service provider ID
+	var spIndex = -1
+	for i, provider := range sp.Config.ServiceProviders {
+		if provider.EntityID == spID {
+			spIndex = i
+			break
+		}
+	}
+
+	if spIndex < 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		errMsg := fmt.Sprintf("Invalid Service Provider ID: '%s'", spID)
+		jsonResp := fmt.Sprintf(`{"success": false, "message": "%s"}`, strings.ReplaceAll(errMsg, `"`, `\"`))
+		w.Write([]byte(jsonResp))
+		return
+	}
+
+	// Validate the IdP ID or handle special values
+	idpValid := false
+	if defaultIdPID == "prompt" {
+		idpValid = true
+		// Empty string means prompt (no default)
+		defaultIdPID = ""
+	} else {
+		for _, idp := range sp.Config.IdentityProviders {
+			if idp.ID == defaultIdPID {
+				idpValid = true
+				break
+			}
+		}
+	}
+
+	if !idpValid && defaultIdPID != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"success": false, "message": "Invalid Identity Provider ID"}`))
+		return
+	}
+
+	// Update the service provider's default IdP
+	fmt.Printf("Updating service provider '%s' default IdP from '%s' to '%s'\n",
+		sp.Config.ServiceProviders[spIndex].Name,
+		sp.Config.ServiceProviders[spIndex].DefaultIdP,
+		defaultIdPID)
+
+	sp.Config.ServiceProviders[spIndex].DefaultIdP = defaultIdPID
+
+	// Log the change
+	if defaultIdPID == "" {
+		fmt.Printf("Updated Service Provider '%s' to always prompt for IdP selection\n",
+			sp.Config.ServiceProviders[spIndex].Name)
+	} else {
+		fmt.Printf("Updated Service Provider '%s' to use default IdP: '%s'\n",
+			sp.Config.ServiceProviders[spIndex].Name,
+			defaultIdPID)
+	}
+
+	// Try to save the configuration to disk
+	// We'll use the path from which the config was loaded initially
+	// Note: We get this from the arguments passed to the program
+	var configFile string
+	if len(os.Args) > 1 {
+		configFile = os.Args[1]
+	}
+
+	if configFile != "" {
+		if err := sp.SaveConfig(configFile); err != nil {
+			fmt.Printf("Error saving configuration: %v\n", err)
+			// Create a sanitized error message for JSON
+			errMessage := strings.ReplaceAll(err.Error(), `"`, `\"`)
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(fmt.Sprintf(`{"success": false, "message": "Error saving configuration: %s"}`, errMessage)))
+			return
+		}
+
+		fmt.Printf("Configuration saved to %s\n", configFile)
+	} else {
+		fmt.Printf("Warning: Config file path not available. Changes will persist in memory but will be lost on restart.\n")
+		fmt.Printf("If you want to save configurations permanently, please restart the proxy with a config file path.\n")
+	}
+
+	// Even if we can't save to disk, the changes are still in memory
+	fmt.Printf("Configuration updated for service provider '%s'\n", sp.Config.ServiceProviders[spIndex].Name)
+
+	// Return a success response
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"success": true, "message": "Configuration updated successfully"}`))
+}
+
+// Handle status page to display current proxy configuration
+func (sp *SAMLProxy) handleStatus(w http.ResponseWriter, r *http.Request) {
+	// Styles for the status page
+	const statusCSS = `
+	body {
+		font-family: Arial, sans-serif;
+		line-height: 1.6;
+		margin: 0;
+		padding: 20px;
+		background-color: #f5f5f5;
+	}
+	.container {
+		max-width: 1200px;
+		margin: 0 auto;
+		background-color: #fff;
+		padding: 20px;
+		border-radius: 8px;
+		box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+	}
+	h1, h2, h3 {
+		color: #333;
+	}
+	h1 {
+		text-align: center;
+		margin-bottom: 20px;
+	}
+	h2 {
+		border-bottom: 1px solid #eee;
+		padding-bottom: 10px;
+		margin-top: 30px;
+	}
+	table {
+		width: 100%;
+		border-collapse: collapse;
+		margin-bottom: 20px;
+	}
+	th, td {
+		padding: 10px;
+		border: 1px solid #ddd;
+		text-align: left;
+	}
+	th {
+		background-color: #f8f9fa;
+		font-weight: bold;
+	}
+	.param-value {
+		font-family: monospace;
+		word-break: break-all;
+	}
+	.badge {
+		display: inline-block;
+		padding: 4px 8px;
+		border-radius: 4px;
+		font-size: 12px;
+		font-weight: bold;
+		margin-left: 10px;
+		background-color: #28a745;
+		color: white;
+	}
+	pre {
+		background-color: #f8f9fa;
+		padding: 15px;
+		border-radius: 5px;
+		overflow-x: auto;
+		font-family: monospace;
+		font-size: 14px;
+		border: 1px solid #e9ecef;
+	}
+	/* Configuration controls */
+	.idp-select {
+		padding: 8px;
+		border-radius: 4px;
+		border: 1px solid #ddd;
+		background-color: #fff;
+		min-width: 200px;
+	}
+	.save-button {
+		margin-left: 8px;
+		padding: 8px 12px;
+		background-color: #007bff;
+		color: white;
+		border: none;
+		border-radius: 4px;
+		cursor: pointer;
+	}
+	.save-button:hover {
+		background-color: #0069d9;
+	}
+	.save-status {
+		margin-left: 10px;
+		font-size: 14px;
+	}
+	.success {
+		color: #28a745;
+	}
+	.error {
+		color: #dc3545;
+	}
+	`
+
+	html := fmt.Sprintf(`<!DOCTYPE html>
+	<html>
+	<head>
+		<title>SAML Proxy Status</title>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<style>%s</style>
+	</head>
+	<body>
+		<div class="container">
+			<h1>SAML Proxy Status</h1>
+			
+			<h2>General Configuration</h2>
+			<table>
+				<tr>
+					<th>Proxy Entity ID</th>
+					<td class="param-value">%s</td>
+				</tr>
+				<tr>
+					<th>Base URL</th>
+					<td class="param-value">%s</td>
+				</tr>
+				<tr>
+					<th>Listen Address</th>
+					<td class="param-value">%s</td>
+				</tr>
+				<tr>
+					<th>Debug Mode</th>
+					<td class="param-value">%t</td>
+				</tr>
+				<tr>
+					<th>Active Requests</th>
+					<td class="param-value">%d</td>
+				</tr>
+			</table>
+			
+			<h2>Identity Providers (%d configured)</h2>
+			<table>
+				<thead>
+					<tr>
+						<th>ID</th>
+						<th>Name</th>
+						<th>Entity ID</th>
+						<th>SSO URL</th>
+						<th>Metadata URL</th>
+						<th>Default</th>
+					</tr>
+				</thead>
+				<tbody>`,
+		statusCSS,
+		sp.Config.ProxyEntityID,
+		sp.Config.BaseURL,
+		sp.Config.ListenAddr,
+		sp.Config.Debug,
+		len(sp.RequestTracker),
+		len(sp.Config.IdentityProviders))
+
+	// Add rows for each IdP
+	for _, idp := range sp.Config.IdentityProviders {
+		defaultBadge := ""
+		if idp.DefaultIdP {
+			defaultBadge = "✓"
+		}
+
+		html += fmt.Sprintf(`
+					<tr>
+						<td class="param-value">%s</td>
+						<td>%s</td>
+						<td class="param-value">%s</td>
+						<td class="param-value">%s</td>
+						<td class="param-value">%s</td>
+						<td class="param-value">%s</td>
+					</tr>`,
+			idp.ID,
+			idp.Name,
+			idp.EntityID,
+			idp.SSOURL,
+			idp.MetadataURL,
+			defaultBadge)
+	}
+
+	// Close IdP table and add SP table
+	html += fmt.Sprintf(`
+				</tbody>
+			</table>
+			
+			<h2>Service Providers (%d configured)</h2>
+			<table>
+				<thead>
+					<tr>
+						<th>Name</th>
+						<th>Entity ID</th>
+						<th>ACS URL</th>
+						<th>Attributes</th>
+						<th>Default IdP</th>
+					</tr>
+				</thead>
+				<tbody>`,
+		len(sp.Config.ServiceProviders))
+
+	// Add rows for each SP
+	for _, provider := range sp.Config.ServiceProviders {
+		// Format the attribute map
+		attrMap := ""
+		for spAttr, idpAttr := range provider.AttributeMap {
+			attrMap += fmt.Sprintf("%s &rarr; %s<br>", idpAttr, spAttr)
+		}
+
+		// Create a URL-safe ID for the HTML elements
+		safeID := strings.ReplaceAll(provider.EntityID, ":", "_")
+		safeID = strings.ReplaceAll(safeID, "/", "_")
+		safeID = strings.ReplaceAll(safeID, ".", "_")
+
+		// Create dropdown for IdP selection - store both IDs for reference
+		idpDropdown := fmt.Sprintf(`<select id="idp-select-%s" class="idp-select" data-sp-id="%s" data-safe-id="%s">
+			<option value="prompt"`, safeID, provider.EntityID, safeID)
+
+		// Mark 'prompt' as selected if no default IdP is set
+		if provider.DefaultIdP == "" {
+			idpDropdown += ` selected`
+		}
+
+		idpDropdown += `>Always prompt user</option>`
+
+		// Add options for each Identity Provider
+		for _, idp := range sp.Config.IdentityProviders {
+			// Debug the IdP IDs being compared
+			if sp.Config.Debug && provider.DefaultIdP != "" {
+				fmt.Printf("Comparing IdP IDs - Provider Default: '%s', Current IdP: '%s', Match: %v\n",
+					provider.DefaultIdP, idp.ID, provider.DefaultIdP == idp.ID)
+			}
+
+			idpDropdown += `<option value="` + idp.ID + `"`
+
+			// Mark the current default as selected
+			if provider.DefaultIdP == idp.ID {
+				idpDropdown += ` selected`
+			}
+
+			// Add a "default" indicator if this is the global default IdP
+			defaultMarker := ""
+			if idp.DefaultIdP {
+				defaultMarker = " (Global Default)"
+			}
+
+			idpDropdown += `>` + idp.Name + defaultMarker + `</option>`
+		}
+
+		idpDropdown += fmt.Sprintf(`</select>
+						<button class="save-button" data-sp-id="%s" data-safe-id="%s">Save</button>
+						<span class="save-status" id="save-status-%s"></span>`,
+						provider.EntityID, safeID, safeID)
+
+		html += fmt.Sprintf(`
+					<tr>
+						<td>%s</td>
+						<td class="param-value">%s</td>
+						<td class="param-value">%s</td>
+						<td class="param-value">%s</td>
+						<td class="param-value">%s</td>
+					</tr>`,
+			provider.Name,
+			provider.EntityID,
+			provider.ACSUrl,
+			attrMap,
+			idpDropdown)
+	}
+
+	// Close the document
+	html += `
+				</tbody>
+			</table>
+			
+			<h2>Certificate Information</h2>
+			<table>
+				<tr>
+					<th>Subject</th>
+					<td class="param-value">`
+
+	// Add certificate information if available
+	if sp.Certificate != nil {
+		html += sp.Certificate.Subject.CommonName
+	} else {
+		html += "No certificate loaded"
+	}
+
+	html += `</td>
+				</tr>
+				<tr>
+					<th>Issuer</th>
+					<td class="param-value">`
+
+	if sp.Certificate != nil {
+		html += sp.Certificate.Issuer.CommonName
+	} else {
+		html += "N/A"
+	}
+
+	html += `</td>
+				</tr>
+				<tr>
+					<th>Serial Number</th>
+					<td class="param-value">`
+
+	if sp.Certificate != nil {
+		html += sp.Certificate.SerialNumber.String()
+	} else {
+		html += "N/A"
+	}
+
+	html += `</td>
+				</tr>
+				<tr>
+					<th>Not Before</th>
+					<td class="param-value">`
+
+	if sp.Certificate != nil {
+		html += sp.Certificate.NotBefore.Format(time.RFC3339)
+	} else {
+		html += "N/A"
+	}
+
+	html += `</td>
+				</tr>
+				<tr>
+					<th>Not After</th>
+					<td class="param-value">`
+
+	if sp.Certificate != nil {
+		html += sp.Certificate.NotAfter.Format(time.RFC3339)
+	} else {
+		html += "N/A"
+	}
+
+	html += `</td>
+				</tr>
+			</table>
+			
+			<h2>Metadata Endpoints</h2>
+			<table>
+				<tr>
+					<th>Metadata URL</th>
+					<td class="param-value"><a href="/metadata" target="_blank">`
+
+	html += fmt.Sprintf("%s/metadata", sp.Config.BaseURL)
+
+	html += `</a></td>
+				</tr>
+			</table>
+		</div>
+
+		<script>
+		// Add event listeners to all save buttons
+		document.addEventListener('DOMContentLoaded', function() {
+			// Get all save buttons
+			const saveButtons = document.querySelectorAll('.save-button');
+			
+			// Add click event listener to each button
+			saveButtons.forEach(button => {
+				button.addEventListener('click', function() {
+					// Get the SP ID from the button's data attribute
+					const spId = this.getAttribute("data-sp-id"); const safeId = this.getAttribute("data-safe-id");
+					
+					// Get the selected IdP ID from the dropdown
+					const selectElement = document.getElementById("idp-select-" + safeId);
+					const idpId = selectElement.value;
+					
+					// Get the status element
+					const statusElement = document.getElementById("save-status-" + safeId);
+					statusElement.textContent = 'Saving...';
+					statusElement.className = 'save-status';
+					
+					// Create the form data as URLSearchParams (simpler than FormData)
+					const params = new URLSearchParams();
+					params.append('sp_id', spId);
+					params.append('default_idp_id', idpId);
+					
+					// Log what we're sending
+					console.log('Saving configuration:', {
+						sp_id: spId,
+						default_idp_id: idpId
+					});
+					
+					// Send the request
+					fetch('/api/save-sp-config', {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/x-www-form-urlencoded',
+						},
+						body: params
+					})
+					.then(response => {
+						console.log('Response status:', response.status);
+						if (!response.ok) {
+							return response.text().then(text => {
+								try {
+									// Try to parse as JSON
+									const data = JSON.parse(text);
+									console.error('Error response data:', data);
+									return data;
+								} catch (e) {
+									// If not JSON, return the raw text
+									console.error('Error response text:', text);
+									throw new Error("Server error: " + response.status + " - " + text);
+								}
+							});
+						}
+						return response.json();
+					})
+					.then(data => {
+						if (data.success) {
+							statusElement.textContent = 'Saved!';
+							statusElement.className = 'save-status success';
+							
+							// Clear the success message after 3 seconds
+							setTimeout(() => {
+								statusElement.textContent = '';
+							}, 3000);
+						} else {
+							statusElement.textContent = '✗ Error: ' + data.message;
+							statusElement.className = 'save-status error';
+						}
+					})
+					.catch(error => {
+						console.error('Error in fetch operation:', error);
+						statusElement.textContent = '✗ Error: ' + error.message;
+						statusElement.className = 'save-status error';
+					});
+				});
+			});
+		});
+		</script>
+	</body>
+	</html>`
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(html))
+}
+
+// Generates metadata for the proxy to be used by both Service Providers and Identity Providers
 func (sp *SAMLProxy) handleMetadata(w http.ResponseWriter, r *http.Request) {
 	authnRequestsSigned := true
 	wantAssertionsSigned := true
+	wantAuthnRequestsSigned := true
+
+	// Common key descriptor elements for both SP and IdP roles
+	keyDescriptors := []saml.KeyDescriptor{
+		{
+			Use: "signing",
+			KeyInfo: saml.KeyInfo{
+				X509Data: saml.X509Data{
+					X509Certificates: []saml.X509Certificate{
+						{
+							Data: base64.StdEncoding.EncodeToString(sp.Certificate.Raw),
+						},
+					},
+				},
+			},
+		},
+		{
+			Use: "encryption",
+			KeyInfo: saml.KeyInfo{
+				X509Data: saml.X509Data{
+					X509Certificates: []saml.X509Certificate{
+						{
+							Data: base64.StdEncoding.EncodeToString(sp.Certificate.Raw),
+						},
+					},
+				},
+			},
+			EncryptionMethods: []saml.EncryptionMethod{
+				{Algorithm: "http://www.w3.org/2001/04/xmlenc#aes128-cbc"},
+				{Algorithm: "http://www.w3.org/2001/04/xmlenc#aes192-cbc"},
+				{Algorithm: "http://www.w3.org/2001/04/xmlenc#aes256-cbc"},
+				{Algorithm: "http://www.w3.org/2001/04/xmlenc#rsa-oaep-mgf1p"},
+			},
+		},
+	}
+
+	// Common name ID formats for both SP and IdP roles
+	nameIDFormats := []saml.NameIDFormat{
+		saml.UnspecifiedNameIDFormat,
+		saml.EmailAddressNameIDFormat,
+		saml.TransientNameIDFormat,
+		saml.PersistentNameIDFormat,
+	}
 
 	metadata := saml.EntityDescriptor{
 		EntityID: sp.Config.ProxyEntityID,
+
+		// As a Service Provider to upstream IdPs
 		SPSSODescriptors: []saml.SPSSODescriptor{
 			{
 				SSODescriptor: saml.SSODescriptor{
 					RoleDescriptor: saml.RoleDescriptor{
 						ProtocolSupportEnumeration: "urn:oasis:names:tc:SAML:2.0:protocol",
-						KeyDescriptors: []saml.KeyDescriptor{
-							{
-								Use: "signing",
-								KeyInfo: saml.KeyInfo{
-									X509Data: saml.X509Data{
-										X509Certificates: []saml.X509Certificate{
-											{
-												Data: base64.StdEncoding.EncodeToString(sp.Certificate.Raw),
-											},
-										},
-									},
-								},
-							},
-							{
-								Use: "encryption",
-								KeyInfo: saml.KeyInfo{
-									X509Data: saml.X509Data{
-										X509Certificates: []saml.X509Certificate{
-											{
-												Data: base64.StdEncoding.EncodeToString(sp.Certificate.Raw),
-											},
-										},
-									},
-								},
-								EncryptionMethods: []saml.EncryptionMethod{
-									{Algorithm: "http://www.w3.org/2001/04/xmlenc#aes128-cbc"},
-									{Algorithm: "http://www.w3.org/2001/04/xmlenc#aes192-cbc"},
-									{Algorithm: "http://www.w3.org/2001/04/xmlenc#aes256-cbc"},
-									{Algorithm: "http://www.w3.org/2001/04/xmlenc#rsa-oaep-mgf1p"},
-								},
-							},
-						},
+						KeyDescriptors:             keyDescriptors,
 					},
-					NameIDFormats: []saml.NameIDFormat{
-						saml.UnspecifiedNameIDFormat,
-						saml.EmailAddressNameIDFormat,
-					},
+					NameIDFormats: nameIDFormats,
 				},
 				AssertionConsumerServices: []saml.IndexedEndpoint{
 					{
@@ -304,6 +1010,32 @@ func (sp *SAMLProxy) handleMetadata(w http.ResponseWriter, r *http.Request) {
 				},
 				AuthnRequestsSigned:  &authnRequestsSigned,
 				WantAssertionsSigned: &wantAssertionsSigned,
+			},
+		},
+
+		// As an Identity Provider to downstream SPs (clients)
+		IDPSSODescriptors: []saml.IDPSSODescriptor{
+			{
+				SSODescriptor: saml.SSODescriptor{
+					RoleDescriptor: saml.RoleDescriptor{
+						ProtocolSupportEnumeration: "urn:oasis:names:tc:SAML:2.0:protocol",
+						KeyDescriptors:             keyDescriptors,
+					},
+					NameIDFormats: nameIDFormats,
+				},
+				WantAuthnRequestsSigned: &wantAuthnRequestsSigned,
+				SingleSignOnServices: []saml.Endpoint{
+					{
+						Binding:  saml.HTTPPostBinding,
+						Location: fmt.Sprintf("%s/saml/sso", sp.Config.BaseURL),
+					},
+					{
+						Binding:  saml.HTTPRedirectBinding,
+						Location: fmt.Sprintf("%s/saml/sso", sp.Config.BaseURL),
+					},
+				},
+				// The SignAssertions field doesn't exist directly in IDPSSODescriptor
+				// The proxy will sign assertions in the samlResponse handler
 			},
 		},
 	}
@@ -350,19 +1082,66 @@ func (sp *SAMLProxy) handleIdPSelection(w http.ResponseWriter, r *http.Request) 
         
         <div class="idp-grid">`
 
-	// Add each IdP as a card
+	// Add each IdP as a card with detailed parameters
 	for _, idp := range sp.Config.IdentityProviders {
 		logoHTML := ""
 		if idp.LogoURL != "" {
 			logoHTML = fmt.Sprintf(`<img src="%s" alt="%s Logo" class="idp-logo">`, idp.LogoURL, idp.Name)
 		}
 
+		// Default badge if applicable
+		defaultBadge := ""
+		if idp.DefaultIdP {
+			defaultBadge = `<span class="badge badge-default">Default</span>`
+		}
+
+		// Build IdP card with detailed parameters
 		html += fmt.Sprintf(`
-            <a href="/saml/complete-request?request_id=%s&idp_id=%s" class="idp-card">
-                %s
-                <div class="idp-name">%s</div>
-                <div class="idp-description">%s</div>
-            </a>`, requestID, idp.ID, logoHTML, idp.Name, idp.Description)
+            <div class="idp-card">
+                <div class="idp-header">
+                    %s
+                    <div class="idp-title">
+                        <div class="idp-name">%s %s</div>
+                        <div class="idp-description">%s</div>
+                    </div>
+                </div>
+                
+                <div class="idp-params">
+                    <div class="param-group">
+                        <span class="param-label">ID</span>
+                        <div class="param-value">%s</div>
+                    </div>
+                    
+                    <div class="param-group">
+                        <span class="param-label">Entity ID</span>
+                        <div class="param-value">%s</div>
+                    </div>
+                    
+                    <div class="param-group">
+                        <span class="param-label">SSO URL</span>
+                        <div class="param-value">%s</div>
+                    </div>
+                    
+                    <div class="param-group">
+                        <span class="param-label">Metadata URL</span>
+                        <div class="param-value">%s</div>
+                    </div>
+                </div>
+                
+                <a href="/saml/complete-request?request_id=%s&idp_id=%s" class="btn">
+                    Select this Identity Provider
+                </a>
+            </div>`,
+            logoHTML,
+            idp.Name,
+            defaultBadge,
+            idp.Description,
+            idp.ID,
+            idp.EntityID,
+            idp.SSOURL,
+            idp.MetadataURL,
+            requestID,
+            idp.ID)
 	}
 
 	html += `
@@ -473,10 +1252,21 @@ func (sp *SAMLProxy) handleSAMLRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Find the service provider config that sent this request
+	fmt.Printf("\n==== SAML REQUEST RECEIVED ====\n")
+	fmt.Printf("AuthnRequest from EntityID: %s\n", authnRequest.Issuer.Value)
+
+	// Show all SPs for comparison
+	fmt.Println("Currently configured Service Providers:")
+	for i, provider := range sp.Config.ServiceProviders {
+		fmt.Printf("[%d] EntityID: %s, Name: %s, DefaultIdP: %s\n",
+			i, provider.EntityID, provider.Name, provider.DefaultIdP)
+	}
+
 	var serviceProvider *ServiceProviderConfig
 	for i, provider := range sp.Config.ServiceProviders {
 		if provider.EntityID == authnRequest.Issuer.Value {
 			serviceProvider = &sp.Config.ServiceProviders[i]
+			fmt.Printf("Found matching SP: %s (DefaultIdP: %s)\n", provider.Name, provider.DefaultIdP)
 			break
 		}
 	}
@@ -495,28 +1285,69 @@ func (sp *SAMLProxy) handleSAMLRequest(w http.ResponseWriter, r *http.Request) {
 		RelayState:          relayState,
 		ServiceProvider:     serviceProvider,
 		RequestID:           authnRequest.ID,
+		OriginalRequestID:   authnRequest.ID, // Store the original ID from the SP
 		ACSUrl:              authnRequest.AssertionConsumerServiceURL,
 		CreatedAt:           time.Now(),
 	}
 	sp.RequestTracker[newRequestID] = samlRequest
 
-	// Check for default IdP or if we need to show selection page
-	var defaultIdP *IdentityProviderConfig
-	for i, idp := range sp.Config.IdentityProviders {
-		if idp.DefaultIdP {
-			defaultIdP = &sp.Config.IdentityProviders[i]
-			break
+	// First check if this SP has a specific default IdP configured
+	var selectedIdP *IdentityProviderConfig
+
+	// Debug SP configuration
+	if sp.Config.Debug {
+		fmt.Printf("Checking for SP-specific default IdP for '%s' (EntityID: %s)\n",
+			serviceProvider.Name, serviceProvider.EntityID)
+		fmt.Printf("SP default IdP setting: '%s'\n", serviceProvider.DefaultIdP)
+	}
+
+	if serviceProvider.DefaultIdP != "" {
+		// Find the IdP specified as default for this SP
+		foundMatch := false
+		for i, idp := range sp.Config.IdentityProviders {
+			if sp.Config.Debug {
+				fmt.Printf("  Checking IdP: %s (ID: %s)\n", idp.Name, idp.ID)
+			}
+
+			if idp.ID == serviceProvider.DefaultIdP {
+				selectedIdP = &sp.Config.IdentityProviders[i]
+				foundMatch = true
+				fmt.Printf("Using SP-specific default IdP: %s (%s) for SP: %s\n",
+					idp.Name, idp.ID, serviceProvider.Name)
+				break
+			}
+		}
+
+		if !foundMatch && sp.Config.Debug {
+			fmt.Printf("WARNING: Could not find configured default IdP with ID: '%s'\n",
+				serviceProvider.DefaultIdP)
 		}
 	}
 
-	// If we have a default IdP and only one IdP configured, use it directly
-	if defaultIdP != nil || len(sp.Config.IdentityProviders) == 1 {
-		// Use default IdP or the only IdP available
-		if defaultIdP == nil {
-			defaultIdP = &sp.Config.IdentityProviders[0]
+	// If no SP-specific default was found, fall back to global default
+	if selectedIdP == nil {
+		for i, idp := range sp.Config.IdentityProviders {
+			if idp.DefaultIdP {
+				selectedIdP = &sp.Config.IdentityProviders[i]
+				if sp.Config.Debug {
+					fmt.Printf("Using global default IdP: %s (%s)\n", idp.Name, idp.ID)
+				}
+				break
+			}
+		}
+	}
+
+	// If we have a selected IdP (from SP-specific default or global default) or only one IdP configured, use it directly
+	if selectedIdP != nil || len(sp.Config.IdentityProviders) == 1 {
+		// Use selected IdP or the only IdP available if no default is set
+		if selectedIdP == nil {
+			selectedIdP = &sp.Config.IdentityProviders[0]
+			if sp.Config.Debug {
+				fmt.Printf("Using the only available IdP: %s (%s)\n", selectedIdP.Name, selectedIdP.ID)
+			}
 		}
 
-		samlRequest.IdentityProvider = defaultIdP
+		samlRequest.IdentityProvider = selectedIdP
 
 		// Make sure the relay state is set to the request ID so we can retrieve it later
 		samlRequest.RelayState = newRequestID
@@ -526,6 +1357,15 @@ func (sp *SAMLProxy) handleSAMLRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// If there are multiple IdPs and no default is set, redirect to selection page
+	if sp.Config.Debug {
+		fmt.Printf("No default IdP found and multiple IdPs configured, redirecting to selection page\n")
+		fmt.Printf("Service Provider default IdP setting: '%s'\n", serviceProvider.DefaultIdP)
+
+		for i, idp := range sp.Config.IdentityProviders {
+			fmt.Printf("Available IdP #%d: %s (ID: '%s')\n", i, idp.Name, idp.ID)
+		}
+	}
+
 	redirectURL := fmt.Sprintf("%s/saml/select-idp?request_id=%s", sp.Config.BaseURL, newRequestID)
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 }
@@ -540,17 +1380,18 @@ func (sp *SAMLProxy) forwardRequestToIdP(w http.ResponseWriter, r *http.Request,
 	// Create a new SAML request to the IdP
 	format := "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"
 	allowCreate := true
-	
+
 	// Use a time slightly in the past to account for clock drift
 	// Many IdPs have a 5-minute tolerance window
 	issueInstant := time.Now().UTC().Add(-30 * time.Second)
-	
-	// Generate a new unique ID
+
+	// Generate a new unique ID for the request to the IdP
 	newID := samlutils.GenerateID("id-")
-	
-	// Update the stored request ID so we can recognize it in the response
+
+	// Update the stored request ID but preserve the original request ID for the final response
 	samlRequest.RequestID = newID
-	
+	// originalRequestID is already set and preserved
+
 	newAuthnRequest := saml.AuthnRequest{
 		ID:                          newID,
 		IssueInstant:                issueInstant,
@@ -571,7 +1412,8 @@ func (sp *SAMLProxy) forwardRequestToIdP(w http.ResponseWriter, r *http.Request,
 	// Debug logging
 	if sp.Config.Debug {
 		fmt.Printf("Sending SAML request to IdP %s:\n", samlRequest.IdentityProvider.Name)
-		fmt.Printf("  ID: %s\n", newAuthnRequest.ID)
+		fmt.Printf("  Original SP Request ID: %s\n", samlRequest.OriginalRequestID)
+		fmt.Printf("  Current Request ID for IdP: %s\n", newAuthnRequest.ID)
 		fmt.Printf("  IssueInstant: %s\n", newAuthnRequest.IssueInstant.Format(time.RFC3339))
 		fmt.Printf("  Destination: %s\n", newAuthnRequest.Destination)
 		fmt.Printf("  ACS URL: %s\n", newAuthnRequest.AssertionConsumerServiceURL)
@@ -652,18 +1494,18 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Failed to parse SAML response", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Check if the response has an encrypted assertion
 	if samlResp.EncryptedAssertion != nil {
 		fmt.Println("==== ENCRYPTED ASSERTION DETECTED ====")
-		
+
 		// Log decryption attempt with certificate details
 		fmt.Println("Attempting to decrypt assertion using proxy certificate...")
-		
+
 		// Print certificate details for debugging
 		if sp.Certificate != nil {
-			fmt.Printf("Using certificate: Subject=%s, Issuer=%s\n", 
-				sp.Certificate.Subject.CommonName, 
+			fmt.Printf("Using certificate: Subject=%s, Issuer=%s\n",
+				sp.Certificate.Subject.CommonName,
 				sp.Certificate.Issuer.CommonName)
 			fmt.Printf("Certificate serial number: %s\n", sp.Certificate.SerialNumber.String())
 			certFingerprint := sha256.Sum256(sp.Certificate.Raw)
@@ -671,29 +1513,92 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 		} else {
 			fmt.Println("WARNING: No certificate available!")
 		}
-		
+
 		// Try to decrypt the assertion using our private key
 		fmt.Println("Starting decryption process...")
-		
+
+		// Dump the XML structure for debugging
+		assertionDoc := etree.NewDocument()
+		assertionDoc.AddChild(samlResp.EncryptedAssertion)
+		assertionXML, _ := assertionDoc.WriteToString()
+		fmt.Printf("Encrypted assertion XML structure:\n%s\n", assertionXML)
+
 		// Use the xmlenc.Decrypt function from the crewjam/saml library
 		plaintextBytes, err := xmlenc.Decrypt(sp.PrivateKey, samlResp.EncryptedAssertion)
 		if err != nil {
 			fmt.Printf("Failed to decrypt assertion: %v\n", err)
-			
+
 			// Additional debugging for common encryption issues
 			if strings.Contains(err.Error(), "padding") {
 				fmt.Println("This appears to be a padding error, which often indicates the wrong private key was used")
 			} else if strings.Contains(err.Error(), "no key") {
 				fmt.Println("This appears to be an issue with finding the correct key for decryption")
+			} else if strings.Contains(err.Error(), "cannot find required element: EncryptionMethod") ||
+				strings.Contains(err.Error(), "algorithm not supported") {
+				fmt.Println("The encrypted assertion uses an unsupported encryption format")
+				fmt.Println("Trying manual extraction of encrypted data...")
+
+				// Look for the EncryptedData element
+				encDataEl := samlResp.EncryptedAssertion.FindElement("//xenc:EncryptedData")
+				if encDataEl != nil {
+					// Check encryption method
+					encMethodEl := encDataEl.FindElement(".//xenc:EncryptionMethod")
+					if encMethodEl != nil {
+						algorithm := encMethodEl.SelectAttrValue("Algorithm", "")
+						fmt.Printf("Encryption algorithm: %s\n", algorithm)
+
+						// Check if it's AES-256-GCM (XMLEnc 1.1 algorithm)
+						if algorithm == "http://www.w3.org/2009/xmlenc11#aes256-gcm" {
+							fmt.Println("Detected AES-256-GCM encryption (XMLEnc 1.1)")
+							fmt.Println("This algorithm is not directly supported by the library")
+							fmt.Println("Using a fallback approach...")
+
+							// Extract the key details
+							encKeyEl := encDataEl.FindElement(".//xenc:EncryptedKey")
+							if encKeyEl != nil {
+								// Get the cipher value
+								cipherValueEl := encKeyEl.FindElement(".//xenc:CipherValue")
+								if cipherValueEl != nil {
+									keyData := cipherValueEl.Text()
+									fmt.Printf("Found encrypted key data (%d bytes)\n", len(keyData))
+
+									// Get the encrypted data
+									encDataValueEl := encDataEl.FindElement("./xenc:CipherData/xenc:CipherValue")
+									if encDataValueEl != nil {
+										encDataValue := encDataValueEl.Text()
+										fmt.Printf("Found encrypted data (%d bytes)\n", len(encDataValue))
+
+										fmt.Println("Unfortunately, direct decryption of AES-256-GCM from XMLEnc 1.1 is not implemented")
+										fmt.Println("You may need to update the IdP configuration to use a compatible encryption algorithm")
+										fmt.Println("Compatible algorithms include: AES-128-CBC, AES-256-CBC, or disable encryption")
+									} else {
+										fmt.Println("Failed to find CipherValue for encrypted data")
+									}
+								} else {
+									fmt.Println("Failed to find CipherValue for encrypted key")
+								}
+							} else {
+								fmt.Println("Failed to find EncryptedKey element")
+							}
+						} else {
+							fmt.Printf("Unsupported encryption algorithm: %s\n", algorithm)
+							fmt.Println("Please check the IdP configuration for supported algorithms")
+						}
+					} else {
+						fmt.Println("Failed to find EncryptionMethod element")
+					}
+				} else {
+					fmt.Println("Failed to find EncryptedData element")
+				}
 			}
-			
+
 			http.Error(w, "Failed to decrypt SAML assertion", http.StatusInternalServerError)
 			return
 		}
-		
+
 		// Log success
 		fmt.Println("Successfully decrypted assertion!")
-		
+
 		// Parse the decrypted XML into a saml.Assertion
 		decryptedAssertion := &saml.Assertion{}
 		if err := xml.Unmarshal(plaintextBytes, decryptedAssertion); err != nil {
@@ -701,11 +1606,11 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "Failed to parse decrypted assertion", http.StatusInternalServerError)
 			return
 		}
-		
+
 		// Replace the encrypted assertion with the decrypted one
 		samlResp.Assertion = decryptedAssertion
 		samlResp.EncryptedAssertion = nil
-		
+
 		fmt.Println("Decrypted assertion successfully parsed and added to response")
 	} else if samlResp.Assertion == nil {
 		fmt.Println("==== WARNING: NO ASSERTION FOUND ====")
@@ -730,7 +1635,7 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 
 	// Extract attributes from the response
 	attributes := make(map[string][]string)
-	
+
 	// Log SAML response metadata
 	fmt.Printf("==== SAML RESPONSE RECEIVED ====\n")
 	fmt.Printf("Response ID: %s\n", samlResp.ID)
@@ -738,7 +1643,13 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 	fmt.Printf("InResponseTo: %s\n", samlResp.InResponseTo)
 	fmt.Printf("Issuer: %s\n", samlResp.Issuer.Value)
 	fmt.Printf("Status: %s\n", samlResp.Status.StatusCode.Value)
-	
+
+	// Log request ID tracking
+	fmt.Printf("==== REQUEST ID TRACKING ====\n")
+	fmt.Printf("Original SP Request ID: %s\n", originalRequest.OriginalRequestID)
+	fmt.Printf("Current Request ID: %s\n", originalRequest.RequestID)
+	fmt.Printf("Will use Original SP Request ID for InResponseTo\n")
+
 	// Extract and log subject information
 	if samlResp.Assertion != nil && samlResp.Assertion.Subject != nil && samlResp.Assertion.Subject.NameID != nil {
 		fmt.Printf("Subject NameID: %s\n", samlResp.Assertion.Subject.NameID.Value)
@@ -746,7 +1657,7 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 	}
 	if samlResp.Assertion != nil {
 		fmt.Printf("==== SAML ATTRIBUTES ====\n")
-		
+
 		for _, statement := range samlResp.Assertion.AttributeStatements {
 			for _, attr := range statement.Attributes {
 				values := make([]string, len(attr.Values))
@@ -754,7 +1665,7 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 					values[i] = value.Value
 				}
 				attributes[attr.Name] = values
-				
+
 				// Log each attribute and its values
 				fmt.Printf("Attribute '%s':\n", attr.Name)
 				for i, value := range values {
@@ -762,18 +1673,18 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 				}
 			}
 		}
-		
+
 		// Log assertion conditions if present
 		if samlResp.Assertion.Conditions != nil {
 			fmt.Printf("==== ASSERTION CONDITIONS ====\n")
 			fmt.Printf("NotBefore: %s\n", samlResp.Assertion.Conditions.NotBefore.Format(time.RFC3339))
 			fmt.Printf("NotOnOrAfter: %s\n", samlResp.Assertion.Conditions.NotOnOrAfter.Format(time.RFC3339))
-			
+
 			for _, audience := range samlResp.Assertion.Conditions.AudienceRestrictions {
 				fmt.Printf("Audience: %s\n", audience.Audience.Value)
 			}
 		}
-		
+
 		// Log authentication statements
 		if len(samlResp.Assertion.AuthnStatements) > 0 {
 			fmt.Printf("==== AUTHN STATEMENTS ====\n")
@@ -799,22 +1710,22 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 
 	// Map attributes according to service provider configuration
 	mappedAttributes := make(map[string][]string)
-	
+
 	fmt.Printf("==== MAPPING ATTRIBUTES TO SERVICE PROVIDER ====\n")
-	fmt.Printf("Service Provider: %s (Entity ID: %s)\n", 
-		originalRequest.ServiceProvider.Name, 
+	fmt.Printf("Service Provider: %s (Entity ID: %s)\n",
+		originalRequest.ServiceProvider.Name,
 		originalRequest.ServiceProvider.EntityID)
-	
+
 	for spAttr, idpAttr := range originalRequest.ServiceProvider.AttributeMap {
 		if values, ok := attributes[idpAttr]; ok {
 			mappedAttributes[spAttr] = values
 			fmt.Printf("Mapping '%s' -> '%s': %v\n", idpAttr, spAttr, values)
 		} else {
-			fmt.Printf("No values found for IdP attribute '%s' to map to SP attribute '%s'\n", 
+			fmt.Printf("No values found for IdP attribute '%s' to map to SP attribute '%s'\n",
 				idpAttr, spAttr)
 		}
 	}
-	
+
 	// Log the final set of attributes that will be sent to the SP
 	fmt.Printf("==== FINAL ATTRIBUTES FOR SERVICE PROVIDER ====\n")
 	for attr, values := range mappedAttributes {
@@ -834,7 +1745,7 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 		IssueInstant: nowTime,
 		Version:      "2.0",
 		Destination:  originalRequest.ACSUrl,
-		InResponseTo: originalRequest.RequestID,
+		InResponseTo: originalRequest.OriginalRequestID, // Use the original request ID from the SP
 		Issuer: &saml.Issuer{
 			Format: "urn:oasis:names:tc:SAML:2.0:nameid-format:entity",
 			Value:  sp.Config.ProxyEntityID,
@@ -872,7 +1783,7 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 					SubjectConfirmationData: &saml.SubjectConfirmationData{
 						NotOnOrAfter: fiveFromNow,
 						Recipient:    originalRequest.ACSUrl,
-						InResponseTo: originalRequest.RequestID,
+						InResponseTo: originalRequest.OriginalRequestID, // Use the original request ID from the SP
 						Address:      r.RemoteAddr,
 					},
 				},

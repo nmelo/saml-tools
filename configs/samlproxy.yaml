@@ -29,24 +29,52 @@ service_providers:
       "idpId": "idp_id"
       "idpName": "idp_name"
 
+  - name: "Salesforce"
+    entity_id: "https://beyondidentity-dev-ed.develop.my.salesforce.com"
+    acs_url: "https://beyondidentity-dev-ed.develop.my.salesforce.com"
+    metadata_xml_url: "https://beyondidentity-dev-ed.develop.my.salesforce.com/metadata"
+    attribute_map:
+      "email": "email"
+      "username": "username"
+      "firstName": "firstName"
+      "lastName": "lastName"
+      "userId": "userId"
+      "roles": "roles"
+      "idpId": "idp_id"
+      "idpName": "idp_name"
+
+  - name: "Cloudflare"
+    entity_id: "urn:samlclient:sp"
+    acs_url: "http://localhost:8080/saml/acs"
+    metadata_xml_url: "http://localhost:8080/saml/metadata"
+    attribute_map:
+      "email": "email"
+      "username": "username"
+      "firstName": "firstName"
+      "lastName": "lastName"
+      "userId": "userId"
+      "roles": "roles"
+      "idpId": "idp_id"
+      "idpName": "idp_name"
+
 # Identity Provider configurations
 identity_providers:
-  - id: "default-idp"
-    name: "Default Identity Provider"
-    description: "The default organizational identity provider"
-    logo_url: "https://dummyimage.com/100x60/f5f2f5/0a1066.png&text=Default"
-    metadata_url: "http://localhost:8085/metadata"
-    entity_id: "http://localhost:8085/metadata"
-    sso_url: "http://localhost:8085/sso"
-#    default_idp: true
-
   - id: "test-idp"
-    name: "Test Identity Provider"
-    description: "A test identity provider for development"
+    name: "Test IDP"
+    description: "A custom test identity provider"
     logo_url: "https://dummyimage.com/100x60/f5f2f5/0a1066.png&text=Test"
     metadata_url: "http://localhost:8085/metadata"
     entity_id: "http://localhost:8085/metadata"
     sso_url: "http://localhost:8085/sso"
+    default_idp: false
+
+  - id: "dev-okta"
+    name: "Dev Okta"
+    description: "Dev Okta Tenant"
+    logo_url: "https://dummyimage.com/100x60/f5f2f5/0a1066.png&text=Okta"
+    metadata_url: "https://dev-115454.okta.com/app/exkr2t2cpcWXWtnqN4x7/sso/saml/metadata"
+    entity_id: "http://www.okta.com/exkr2t2cpcWXWtnqN4x7"
+    sso_url: "https://dev-115454.okta.com/app/dev-115454_samlproxy_1/exkr2t2cpcWXWtnqN4x7/sso/saml"
 
   - id: "bi-nmelo-okta"
     name: "BI nmelo-okta"

@@ -245,10 +245,20 @@ func (sc *SAMLClient) initiateLogin(w http.ResponseWriter, r *http.Request) {
 
 	// Debug logging
 	fmt.Printf("SAML Auth Flow Initiation: Request ID=%s\n", requestID)
+	fmt.Printf("=== SP Configuration ===\n")
+	fmt.Printf("SP Entity ID: %s\n", sc.Config.EntityID)
+	fmt.Printf("SP Base URL: %s\n", sc.Config.BaseURL)
+	fmt.Printf("SP ACS URL: %s\n", sc.Config.AssertionConsumerServiceURL)
+	fmt.Printf("=== IdP Configuration ===\n")
 	fmt.Printf("IdP Metadata URL: %s\n", sc.Config.IdpMetadataURL)
-	fmt.Printf("Entity ID: %s\n", sc.Config.EntityID)
-	fmt.Printf("Base URL: %s\n", sc.Config.BaseURL)
-	fmt.Printf("ACS URL: %s\n", sc.Config.AssertionConsumerServiceURL)
+	if sc.Middleware.ServiceProvider.IDPMetadata != nil {
+		fmt.Printf("IdP Entity ID: %s\n", sc.Middleware.ServiceProvider.IDPMetadata.EntityID)
+		if len(sc.Middleware.ServiceProvider.IDPMetadata.IDPSSODescriptors) > 0 {
+			for i, sso := range sc.Middleware.ServiceProvider.IDPMetadata.IDPSSODescriptors[0].SingleSignOnServices {
+				fmt.Printf("IdP SSO Service #%d: %s (%s)\n", i, sso.Location, sso.Binding)
+			}
+		}
+	}
 
 	// Redirect to SAML middleware's login handler
 	sc.Middleware.HandleStartAuthFlow(w, r)
@@ -274,6 +284,13 @@ var loginTmpl = template.Must(template.New("login").Parse(`
             border: 1px solid #ddd;
             border-radius: 5px;
         }
+        .idp-info {
+            background-color: #e6f7ff;
+            border: 1px solid #91d5ff;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
         button {
             background-color: #4CAF50;
             color: white;
@@ -292,6 +309,14 @@ var loginTmpl = template.Must(template.New("login").Parse(`
     <div class="container">
         <h1>SAML Client - Test Application</h1>
         <p>This is a test SAML Service Provider application.</p>
+        
+        <div class="idp-info">
+            <h2>Identity Provider Configuration</h2>
+            <p><strong>IdP Metadata URL:</strong> {{.IdPMetadataURL}}</p>
+            <p><strong>SP Entity ID:</strong> {{.SPEntityID}}</p>
+            <p><strong>SP ACS URL:</strong> {{.ACSURL}}</p>
+        </div>
+        
         <p>Click the button below to login via the SAML Proxy:</p>
         <form method="post" action="/login">
             <button type="submit">Login via SAML</button>
@@ -326,6 +351,27 @@ var profileTmpl = template.Must(template.New("profile").Parse(`
             background-color: #f9f9f9;
             border-radius: 4px;
         }
+        .section {
+            margin-top: 30px;
+            margin-bottom: 20px;
+        }
+        .idp-info {
+            background-color: #e6f7ff;
+            border: 1px solid #91d5ff;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .idp-config {
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f8f8f8;
+            border-radius: 3px;
+            border: 1px solid #ddd;
+        }
         .logout {
             display: inline-block;
             background-color: #f44336;
@@ -345,19 +391,35 @@ var profileTmpl = template.Must(template.New("profile").Parse(`
         <h1>SAML Client - Profile</h1>
         <p>You are logged in as <strong>{{.NameID}}</strong></p>
         
-        <h2>SAML Attributes</h2>
-        {{range $key, $values := .Attributes}}
-            <div class="attribute">
-                <strong>{{$key}}:</strong>
-                <ul>
-                    {{range $values}}
-                        <li>{{.}}</li>
-                    {{end}}
-                </ul>
+        <!-- Identity Provider Information -->
+        <div class="section">
+            <h2>Identity Provider Information</h2>
+            <div class="idp-info">
+                <p><strong>IdP Entity ID:</strong> {{.IdPEntityID}}</p>
+                <p><strong>IdP Metadata URL:</strong> {{.IdPMetadataURL}}</p>
+                
+                <h3>Service Provider Configuration</h3>
+                <p><strong>SP Entity ID:</strong> {{.SPEntityID}}</p>
+                <p><strong>SP ACS URL:</strong> {{.ACSURL}}</p>
             </div>
-        {{else}}
-            <p>No attributes provided</p>
-        {{end}}
+        </div>
+        
+        <!-- SAML Attributes -->
+        <div class="section">
+            <h2>SAML Attributes</h2>
+            {{range $key, $values := .Attributes}}
+                <div class="attribute">
+                    <strong>{{$key}}:</strong>
+                    <ul>
+                        {{range $values}}
+                            <li>{{.}}</li>
+                        {{end}}
+                    </ul>
+                </div>
+            {{else}}
+                <p>No attributes provided</p>
+            {{end}}
+        </div>
         
         <a href="/logout" class="logout">Logout</a>
     </div>
@@ -378,7 +440,18 @@ func (sc *SAMLClient) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	loginTmpl.Execute(w, nil)
+	// Create login page data
+	data := struct {
+		IdPMetadataURL string
+		SPEntityID     string
+		ACSURL         string
+	}{
+		IdPMetadataURL: sc.Config.IdpMetadataURL,
+		SPEntityID:     sc.Config.EntityID,
+		ACSURL:         sc.Config.AssertionConsumerServiceURL,
+	}
+	
+	loginTmpl.Execute(w, data)
 }
 
 // Handle login POST
@@ -414,11 +487,19 @@ func (sc *SAMLClient) handleProfile(w http.ResponseWriter, r *http.Request) {
 
 	// Create data struct for template
 	data := struct {
-		NameID     string
-		Attributes map[string][]string
+		NameID         string
+		Attributes     map[string][]string
+		IdPEntityID    string
+		IdPMetadataURL string
+		SPEntityID     string
+		ACSURL         string
 	}{
-		NameID:     "Authenticated User via SAML",
-		Attributes: map[string][]string{},
+		NameID:         "Authenticated User via SAML",
+		Attributes:     map[string][]string{},
+		IdPEntityID:    sc.Middleware.ServiceProvider.IDPMetadata.EntityID,
+		IdPMetadataURL: sc.Config.IdpMetadataURL,
+		SPEntityID:     sc.Config.EntityID,
+		ACSURL:         sc.Config.AssertionConsumerServiceURL,
 	}
 
 	// Get user data from cookies

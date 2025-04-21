@@ -37,28 +37,89 @@ kind: ConfigMap
 metadata:
   name: samlproxy-config
   namespace: saml-tools
+  annotations:
+    description: "Updated with multiple IdP support and BI Tenant configuration"
 data:
   samlproxy.yaml: |
-    # SAML Proxy Configuration
+    # SAML Proxy Configuration with Multiple IdPs
     listen_addr: ":8082"
     base_url: "https://proxy.saml-tester.com"
     cert_file: "/app/certs/proxy/cert.pem"
     key_file: "/app/certs/proxy/key.pem"
     session_secret: "proxy-strong-secret-key-here"
-    idp_metadata_url: "https://idp.saml-tester.com/metadata"
-    idp_entity_id: "https://idp.saml-tester.com/metadata"
-    idp_sso_url: "https://idp.saml-tester.com/sso"
     proxy_entity_id: "https://proxy.saml-tester.com/metadata"
     debug: true
+
+    # Service Provider configurations
     service_providers:
-      - name: "Test SP"
+      - name: "SAML Client"
         entity_id: "urn:samlclient:sp"
         acs_url: "https://client.saml-tester.com/saml/acs"
+        metadata_xml_url: "https://client.saml-tester.com/saml/metadata"
         attribute_map:
-          email: "email"
-          firstName: "firstName"
-          lastName: "lastName"
-          roles: "roles"
+          "email": "email"
+          "username": "username"
+          "firstName": "firstName"
+          "lastName": "lastName"
+          "userId": "userId"
+          "roles": "roles"
+          "idpId": "idp_id"
+          "idpName": "idp_name"
+          
+      - name: "Salesforce"
+        entity_id: "https://beyondidentity-dev-ed.develop.my.salesforce.com"
+        acs_url: "https://beyondidentity-dev-ed.develop.my.salesforce.com"
+        metadata_xml_url: "https://beyondidentity-dev-ed.develop.my.salesforce.com/metadata"
+        attribute_map:
+          "email": "email"
+          "username": "username"
+          "firstName": "firstName"
+          "lastName": "lastName"
+          "userId": "userId"
+          "roles": "roles"
+          "idpId": "idp_id"
+          "idpName": "idp_name"
+  
+      - name: "Cloudflare"
+        entity_id: "https://nmeloco.cloudflareaccess.com/cdn-cgi/access/callback"
+        acs_url: "https://nmeloco.cloudflareaccess.com/cdn-cgi/access/callback"
+        metadata_xml_url: "https://nmeloco.cloudflareaccess.com/cdn-cgi/access/d4fe8bad-e654-4ce9-b4ff-fae8bd0e2eeb/saml-metadata"
+        attribute_map:
+          "email": "email"
+          "username": "username"
+          "firstName": "firstName"
+          "lastName": "lastName"
+          "userId": "userId"
+          "roles": "roles"
+          "idpId": "idp_id"
+          "idpName": "idp_name"
+
+    # Identity Provider configurations
+    identity_providers:
+      - id: "local-idp"
+        name: "Local Test IDP"
+        description: "The local test identity provider"
+        logo_url: "https://dummyimage.com/100x60/f5f2f5/0a1066.png&text=Test"
+        metadata_url: "https://idp.saml-tester.com/metadata"
+        entity_id: "https://idp.saml-tester.com/metadata"
+        sso_url: "https://idp.saml-tester.com/sso"
+        default_idp: false
+
+      - id: "bi-nmelo-okta"
+        name: "BI Tenant"
+        description: "ByndID Authentication Tenant"
+        logo_url: "https://dummyimage.com/100x60/f5f2f5/0a1066.png&text=ByndID"
+        metadata_url: "https://auth.byndid.com/saml/v0/1470ea33-4f1b-4b75-b9be-5be1fe607b36/sso/metadata.xml"
+        entity_id: "https://auth.byndid.com/saml/v0/1470ea33-4f1b-4b75-b9be-5be1fe607b36/sso/metadata.xml"
+        sso_url: "https://auth.byndid.com/saml/v0/1470ea33-4f1b-4b75-b9be-5be1fe607b36/sso"
+        
+      - id: "dev-okta"
+        name: "Dev Okta"
+        description: "Dev Okta Tenant"
+        logo_url: "https://dummyimage.com/100x60/f5f2f5/0a1066.png&text=Okta"
+        metadata_url: "https://dev-115454.okta.com/app/exkr2tmr94AKZAnv64x7/sso/saml/metadata"
+        entity_id: "http://www.okta.com/exkr2tmr94AKZAnv64x7"
+        sso_url: "https://dev-115454.okta.com/app/dev-115454_samlproxyonkube_1/exkr2tmr94AKZAnv64x7/sso/saml"
 ---
 apiVersion: v1
 kind: ConfigMap
