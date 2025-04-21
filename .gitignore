@@ -53,3 +53,4 @@ k8s/idp-certs-secret.yaml
 ./samlclient
 ./samlidp
 ./samlproxy
+/release-binaries/
