@@ -33,6 +33,15 @@ func NewSAMLIdP(configFile string) (*SAMLIdP, error) {
 	sessionStore := sessions.NewCookieStore([]byte(config.SessionSecret))
 	sessionStore.Options.HttpOnly = true
 	sessionStore.Options.Secure = !(config.ListenAddr == ":80" || config.ListenAddr == ":8080")
+	sessionStore.Options.Path = "/"
+	sessionStore.Options.MaxAge = 3600 // 1 hour
+	
+	fmt.Println("Session store created with secret:", config.SessionSecret[:5] + "...")
+	fmt.Println("Session cookie settings:", 
+		"HttpOnly:", sessionStore.Options.HttpOnly,
+		"Secure:", sessionStore.Options.Secure,
+		"Path:", sessionStore.Options.Path,
+		"MaxAge:", sessionStore.Options.MaxAge)
 
 	// Create router
 	router := httprouter.New()

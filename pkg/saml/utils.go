@@ -174,3 +174,41 @@ func canonicalize(doc *etree.Document) ([]byte, error) {
 	
 	return canonicalXML, nil
 }
+
+// SignXML signs an XML document (as bytes) with the given certificate and private key
+func SignXML(xmlData []byte, cert *x509.Certificate, key *rsa.PrivateKey) ([]byte, error) {
+	// Parse the XML document
+	doc := etree.NewDocument()
+	if err := doc.ReadFromBytes(xmlData); err != nil {
+		return nil, fmt.Errorf("failed to parse XML: %v", err)
+	}
+	
+	// Get the root element
+	root := doc.Root()
+	if root == nil {
+		return nil, fmt.Errorf("XML document has no root element")
+	}
+	
+	// Get the ID attribute to reference in the signature
+	id := root.SelectAttrValue("ID", "")
+	if id == "" {
+		return nil, fmt.Errorf("root element has no ID attribute")
+	}
+	
+	// Create a Signature element as a child of the root
+	sigEl := root.CreateElement("ds:Signature")
+	sigEl.CreateAttr("xmlns:ds", "http://www.w3.org/2000/09/xmldsig#")
+	
+	// Sign the element
+	if err := SignElement(root, id, cert, key); err != nil {
+		return nil, fmt.Errorf("failed to sign element: %v", err)
+	}
+	
+	// Write the signed XML document to bytes
+	signedXML, err := doc.WriteToBytes()
+	if err != nil {
+		return nil, fmt.Errorf("failed to write XML to bytes: %v", err)
+	}
+	
+	return signedXML, nil
+}
