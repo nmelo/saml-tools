@@ -1,0 +1,44 @@
+FROM golang:1.24-alpine AS builder
+
+WORKDIR /app
+
+# Add build args for versioning
+ARG VERSION=unknown
+ARG BUILD_TIME=unknown
+ENV VERSION=${VERSION}
+ENV BUILD_TIME=${BUILD_TIME}
+
+# Copy go.mod and go.sum files to download dependencies
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy the source code
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+COPY pkg/ ./pkg/
+
+# Build the application for the current architecture
+RUN echo "Building version: ${VERSION}, build time: ${BUILD_TIME}"
+RUN CGO_ENABLED=0 go build -o bin/samlidp ./cmd/samlidp
+
+FROM alpine:latest
+
+WORKDIR /app
+
+# Install CA certificates and OpenSSL for HTTPS connections and key conversion
+RUN apk --no-cache add ca-certificates openssl
+
+# Copy the binary from the builder stage
+COPY --from=builder /app/bin/samlidp .
+
+# Create a directory for configs and certificates
+RUN mkdir -p /app/configs /app/certs/idp
+
+# Default config file path - can be overridden with docker volume mounts
+ENV CONFIG_FILE=/app/configs/samlidp.yaml
+
+# Expose the default port
+EXPOSE 8085
+
+# Run the samlidp
+ENTRYPOINT ["sh", "-c", "./samlidp -config $CONFIG_FILE"]
