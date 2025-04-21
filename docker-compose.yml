@@ -4,7 +4,7 @@ services:
   samlidp:
     build:
       context: .
-      dockerfile: Dockerfile.samlidp
+      dockerfile: Dockerfile.samlidp.local
     ports:
       - "8085:8085"
     volumes:
@@ -18,7 +18,7 @@ services:
   samlproxy:
     build:
       context: .
-      dockerfile: Dockerfile.samlproxy
+      dockerfile: Dockerfile.samlproxy.local
     ports:
       - "8082:8082"
     volumes:
@@ -34,7 +34,7 @@ services:
   samlclient:
     build:
       context: .
-      dockerfile: Dockerfile.samlclient
+      dockerfile: Dockerfile.samlclient.local
     ports:
       - "8080:8080"
     volumes:

@@ -2,13 +2,13 @@
 
 # Server configuration
 listen_addr: ":8085"
-base_url: "http://localhost:8085"
+base_url: "http://samlidp:8085"
 cert_file: "./certs/idp/cert.pem"
 key_file: "./certs/idp/key.pem"
 session_secret: "idp-strong-secret-key-here"
 
 # IdP configuration
-entity_id: "http://localhost:8085/metadata"
+entity_id: "http://samlidp:8085/metadata"
 metadata_path: "/metadata"
 sso_service_path: "/sso"
 

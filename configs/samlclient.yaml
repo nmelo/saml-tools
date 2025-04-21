@@ -2,15 +2,15 @@
 
 # Server configuration
 listen_addr: ":8080"
-base_url: "http://localhost:8080"
+base_url: "http://samlclient:8080"
 cert_file: "./certs/client/cert.pem"
 key_file: "./certs/client/key.pem"
 session_secret: "client-strong-secret-key-here"
 
 # Service Provider configuration
 entity_id: "urn:samlclient:sp"
-assertion_consumer_service_url: "http://localhost:8080/saml/acs"
+assertion_consumer_service_url: "http://samlclient:8080/saml/acs"
 metadata_path: "/saml/metadata"
 
 # Identity Provider (SAML proxy in this case) configuration
-idp_metadata_url: "http://localhost:8082/metadata"
+idp_metadata_url: "http://samlproxy:8082/metadata"

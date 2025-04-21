@@ -2,13 +2,13 @@
 
 # Server configuration
 listen_addr: ":8082"
-base_url: "http://localhost:8082"
+base_url: "http://samlproxy:8082"
 cert_file: "./certs/proxy/cert.pem"
 key_file: "./certs/proxy/key.pem"
 session_secret: "a-strong-random-secret-key-here"
 
 # Proxy configuration
-proxy_entity_id: "http://localhost:8082/metadata"
+proxy_entity_id: "http://samlproxy:8082/metadata"
 
 # Debug mode
 debug: true
@@ -17,8 +17,8 @@ debug: true
 service_providers:
   - name: "SAML Client"
     entity_id: "urn:samlclient:sp"
-    acs_url: "http://localhost:8080/saml/acs"
-    metadata_xml_url: "http://localhost:8080/saml/metadata"
+    acs_url: "http://samlclient:8080/saml/acs"
+    metadata_xml_url: "http://samlclient:8080/saml/metadata"
     attribute_map:
       "email": "email"
       "username": "username"
@@ -45,8 +45,8 @@ service_providers:
 
   - name: "Cloudflare"
     entity_id: "urn:samlclient:sp"
-    acs_url: "http://localhost:8080/saml/acs"
-    metadata_xml_url: "http://localhost:8080/saml/metadata"
+    acs_url: "http://samlclient:8080/saml/acs"
+    metadata_xml_url: "http://samlclient:8080/saml/metadata"
     attribute_map:
       "email": "email"
       "username": "username"
@@ -63,9 +63,9 @@ identity_providers:
     name: "Test IDP"
     description: "A custom test identity provider"
     logo_url: "https://dummyimage.com/100x60/f5f2f5/0a1066.png&text=Test"
-    metadata_url: "http://localhost:8085/metadata"
-    entity_id: "http://localhost:8085/metadata"
-    sso_url: "http://localhost:8085/sso"
+    metadata_url: "http://samlidp:8085/metadata"
+    entity_id: "http://samlidp:8085/metadata"
+    sso_url: "http://samlidp:8085/sso"
     default_idp: false
 
   - id: "dev-okta"
