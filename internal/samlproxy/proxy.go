@@ -2,6 +2,7 @@ package samlproxy
 
 import (
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/beevik/etree"
 	"github.com/crewjam/saml"
+	"github.com/crewjam/saml/xmlenc"
 	"github.com/google/uuid"
 	"github.com/gorilla/sessions"
 	samlutils "github.com/nmelo/saml-tools/pkg/saml"
@@ -650,6 +652,65 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Failed to parse SAML response", http.StatusBadRequest)
 		return
 	}
+	
+	// Check if the response has an encrypted assertion
+	if samlResp.EncryptedAssertion != nil {
+		fmt.Println("==== ENCRYPTED ASSERTION DETECTED ====")
+		
+		// Log decryption attempt with certificate details
+		fmt.Println("Attempting to decrypt assertion using proxy certificate...")
+		
+		// Print certificate details for debugging
+		if sp.Certificate != nil {
+			fmt.Printf("Using certificate: Subject=%s, Issuer=%s\n", 
+				sp.Certificate.Subject.CommonName, 
+				sp.Certificate.Issuer.CommonName)
+			fmt.Printf("Certificate serial number: %s\n", sp.Certificate.SerialNumber.String())
+			certFingerprint := sha256.Sum256(sp.Certificate.Raw)
+			fmt.Printf("Certificate SHA-256 fingerprint: %x\n", certFingerprint)
+		} else {
+			fmt.Println("WARNING: No certificate available!")
+		}
+		
+		// Try to decrypt the assertion using our private key
+		fmt.Println("Starting decryption process...")
+		
+		// Use the xmlenc.Decrypt function from the crewjam/saml library
+		plaintextBytes, err := xmlenc.Decrypt(sp.PrivateKey, samlResp.EncryptedAssertion)
+		if err != nil {
+			fmt.Printf("Failed to decrypt assertion: %v\n", err)
+			
+			// Additional debugging for common encryption issues
+			if strings.Contains(err.Error(), "padding") {
+				fmt.Println("This appears to be a padding error, which often indicates the wrong private key was used")
+			} else if strings.Contains(err.Error(), "no key") {
+				fmt.Println("This appears to be an issue with finding the correct key for decryption")
+			}
+			
+			http.Error(w, "Failed to decrypt SAML assertion", http.StatusInternalServerError)
+			return
+		}
+		
+		// Log success
+		fmt.Println("Successfully decrypted assertion!")
+		
+		// Parse the decrypted XML into a saml.Assertion
+		decryptedAssertion := &saml.Assertion{}
+		if err := xml.Unmarshal(plaintextBytes, decryptedAssertion); err != nil {
+			fmt.Printf("Failed to parse decrypted assertion: %v\n", err)
+			http.Error(w, "Failed to parse decrypted assertion", http.StatusInternalServerError)
+			return
+		}
+		
+		// Replace the encrypted assertion with the decrypted one
+		samlResp.Assertion = decryptedAssertion
+		samlResp.EncryptedAssertion = nil
+		
+		fmt.Println("Decrypted assertion successfully parsed and added to response")
+	} else if samlResp.Assertion == nil {
+		fmt.Println("==== WARNING: NO ASSERTION FOUND ====")
+		fmt.Println("The SAML response contains neither an Assertion nor an EncryptedAssertion")
+	}
 
 	// Find the original request using the relay state (which contains our request ID)
 	originalRequest, ok := sp.RequestTracker[relayState]
@@ -669,7 +730,23 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 
 	// Extract attributes from the response
 	attributes := make(map[string][]string)
+	
+	// Log SAML response metadata
+	fmt.Printf("==== SAML RESPONSE RECEIVED ====\n")
+	fmt.Printf("Response ID: %s\n", samlResp.ID)
+	fmt.Printf("IssueInstant: %s\n", samlResp.IssueInstant.Format(time.RFC3339))
+	fmt.Printf("InResponseTo: %s\n", samlResp.InResponseTo)
+	fmt.Printf("Issuer: %s\n", samlResp.Issuer.Value)
+	fmt.Printf("Status: %s\n", samlResp.Status.StatusCode.Value)
+	
+	// Extract and log subject information
+	if samlResp.Assertion != nil && samlResp.Assertion.Subject != nil && samlResp.Assertion.Subject.NameID != nil {
+		fmt.Printf("Subject NameID: %s\n", samlResp.Assertion.Subject.NameID.Value)
+		fmt.Printf("Subject Format: %s\n", samlResp.Assertion.Subject.NameID.Format)
+	}
 	if samlResp.Assertion != nil {
+		fmt.Printf("==== SAML ATTRIBUTES ====\n")
+		
 		for _, statement := range samlResp.Assertion.AttributeStatements {
 			for _, attr := range statement.Attributes {
 				values := make([]string, len(attr.Values))
@@ -677,6 +754,36 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 					values[i] = value.Value
 				}
 				attributes[attr.Name] = values
+				
+				// Log each attribute and its values
+				fmt.Printf("Attribute '%s':\n", attr.Name)
+				for i, value := range values {
+					fmt.Printf("  Value %d: %s\n", i+1, value)
+				}
+			}
+		}
+		
+		// Log assertion conditions if present
+		if samlResp.Assertion.Conditions != nil {
+			fmt.Printf("==== ASSERTION CONDITIONS ====\n")
+			fmt.Printf("NotBefore: %s\n", samlResp.Assertion.Conditions.NotBefore.Format(time.RFC3339))
+			fmt.Printf("NotOnOrAfter: %s\n", samlResp.Assertion.Conditions.NotOnOrAfter.Format(time.RFC3339))
+			
+			for _, audience := range samlResp.Assertion.Conditions.AudienceRestrictions {
+				fmt.Printf("Audience: %s\n", audience.Audience.Value)
+			}
+		}
+		
+		// Log authentication statements
+		if len(samlResp.Assertion.AuthnStatements) > 0 {
+			fmt.Printf("==== AUTHN STATEMENTS ====\n")
+			for i, stmt := range samlResp.Assertion.AuthnStatements {
+				fmt.Printf("AuthnStatement %d:\n", i+1)
+				fmt.Printf("  AuthnInstant: %s\n", stmt.AuthnInstant.Format(time.RFC3339))
+				fmt.Printf("  SessionIndex: %s\n", stmt.SessionIndex)
+				if stmt.AuthnContext.AuthnContextClassRef != nil {
+					fmt.Printf("  AuthnContextClassRef: %s\n", *stmt.AuthnContext.AuthnContextClassRef)
+				}
 			}
 		}
 	}
@@ -685,13 +792,35 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 	if originalRequest.IdentityProvider != nil {
 		attributes["idp_id"] = []string{originalRequest.IdentityProvider.ID}
 		attributes["idp_name"] = []string{originalRequest.IdentityProvider.Name}
+		fmt.Printf("==== IDP INFORMATION ====\n")
+		fmt.Printf("IdP ID: %s\n", originalRequest.IdentityProvider.ID)
+		fmt.Printf("IdP Name: %s\n", originalRequest.IdentityProvider.Name)
 	}
 
 	// Map attributes according to service provider configuration
 	mappedAttributes := make(map[string][]string)
+	
+	fmt.Printf("==== MAPPING ATTRIBUTES TO SERVICE PROVIDER ====\n")
+	fmt.Printf("Service Provider: %s (Entity ID: %s)\n", 
+		originalRequest.ServiceProvider.Name, 
+		originalRequest.ServiceProvider.EntityID)
+	
 	for spAttr, idpAttr := range originalRequest.ServiceProvider.AttributeMap {
 		if values, ok := attributes[idpAttr]; ok {
 			mappedAttributes[spAttr] = values
+			fmt.Printf("Mapping '%s' -> '%s': %v\n", idpAttr, spAttr, values)
+		} else {
+			fmt.Printf("No values found for IdP attribute '%s' to map to SP attribute '%s'\n", 
+				idpAttr, spAttr)
+		}
+	}
+	
+	// Log the final set of attributes that will be sent to the SP
+	fmt.Printf("==== FINAL ATTRIBUTES FOR SERVICE PROVIDER ====\n")
+	for attr, values := range mappedAttributes {
+		fmt.Printf("Attribute '%s':\n", attr)
+		for i, val := range values {
+			fmt.Printf("  Value %d: %s\n", i+1, val)
 		}
 	}
 

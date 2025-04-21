@@ -49,3 +49,7 @@ Thumbs.db
 k8s/client-certs-secret.yaml
 k8s/proxy-certs-secret.yaml
 k8s/idp-certs-secret.yaml
+
+./samlclient
+./samlidp
+./samlproxy
