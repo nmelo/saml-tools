@@ -146,9 +146,40 @@ var loginTmpl = template.Must(template.New("login").Parse(`
             background-color: #f9f9f9;
             border-radius: 4px;
             cursor: pointer;
+            transition: background-color 0.3s;
         }
         .user-option:hover {
             background-color: #e9e9e9;
+        }
+        .user-option.selected {
+            background-color: #e0f7e0;
+            border: 1px solid #4CAF50;
+        }
+        .email-edit {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f0f0f0;
+            border-radius: 5px;
+            display: none;
+        }
+        .email-edit.visible {
+            display: block;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="email"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+            box-sizing: border-box;
         }
         button {
             background-color: #4CAF50;
@@ -164,6 +195,36 @@ var loginTmpl = template.Must(template.New("login").Parse(`
             background-color: #45a049;
         }
     </style>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const userOptions = document.querySelectorAll('.user-option');
+            const radioButtons = document.querySelectorAll('input[name="username"]');
+            const emailEditSection = document.getElementById('email-edit-section');
+            const emailInput = document.getElementById('custom-email');
+            const defaultEmailSpan = document.getElementById('default-email-value');
+            
+            // Show email edit section when a user is selected
+            radioButtons.forEach(function(radio) {
+                radio.addEventListener('change', function() {
+                    // Update selected styling
+                    userOptions.forEach(option => {
+                        option.classList.remove('selected');
+                    });
+                    
+                    this.closest('.user-option').classList.add('selected');
+                    
+                    // Get the default email for the selected user
+                    const username = this.value;
+                    const userEmail = document.querySelector('input[data-username="'+username+'"]').value;
+                    
+                    // Show email editor and set default value
+                    emailEditSection.classList.add('visible');
+                    emailInput.value = userEmail;
+                    defaultEmailSpan.textContent = userEmail;
+                });
+            });
+        });
+    </script>
 </head>
 <body>
     <div class="container">
@@ -179,6 +240,7 @@ var loginTmpl = template.Must(template.New("login").Parse(`
                     <label>
                         <input type="radio" name="username" value="{{.Username}}">
                         <strong>{{.Username}}</strong>
+                        <input type="hidden" data-username="{{.Username}}" value="{{index .Attributes "email"}}">
                         <ul>
                             {{range $key, $val := .Attributes}}
                                 <li><strong>{{$key}}:</strong> {{$val}}</li>
@@ -187,6 +249,15 @@ var loginTmpl = template.Must(template.New("login").Parse(`
                     </label>
                 </div>
             {{end}}
+            
+            <div id="email-edit-section" class="email-edit">
+                <h3>Customize Email Address</h3>
+                <p>Default email: <span id="default-email-value"></span></p>
+                <div class="form-group">
+                    <label for="custom-email">Enter custom email address:</label>
+                    <input type="email" id="custom-email" name="custom_email" required>
+                </div>
+            </div>
             
             <button type="submit">Login</button>
         </form>
@@ -381,10 +452,14 @@ func (idp *SAMLIdP) handleLogin(w http.ResponseWriter, r *http.Request, _ httpro
 
 	// Get the selected user
 	username := r.FormValue("username")
+	customEmail := r.FormValue("custom_email")
+	
 	var selectedUser *User
-	for i, user := range idp.Config.Users {
+	for _, user := range idp.Config.Users {
 		if user.Username == username {
-			selectedUser = &idp.Config.Users[i]
+			// Make a copy of the user so we don't modify the original
+			userCopy := user
+			selectedUser = &userCopy
 			break
 		}
 	}
@@ -392,6 +467,23 @@ func (idp *SAMLIdP) handleLogin(w http.ResponseWriter, r *http.Request, _ httpro
 	if selectedUser == nil {
 		http.Error(w, "Invalid user selection", http.StatusBadRequest)
 		return
+	}
+	
+	// Override email if custom email is provided
+	if customEmail != "" {
+		// Create a copy of attributes map
+		modifiedAttrs := make(map[string]interface{})
+		for k, v := range selectedUser.Attributes {
+			modifiedAttrs[k] = v
+		}
+		
+		// Set the custom email
+		modifiedAttrs["email"] = customEmail
+		selectedUser.Attributes = modifiedAttrs
+		
+		fmt.Printf("Using custom email: %s instead of default email\n", customEmail)
+	} else {
+		fmt.Println("Using default email address")
 	}
 
 	// Generate SAML response with the selected user's attributes

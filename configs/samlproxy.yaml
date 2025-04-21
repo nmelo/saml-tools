@@ -1,4 +1,4 @@
-# SAML Proxy Configuration
+# SAML Proxy Configuration with Multiple IdPs
 
 # Server configuration
 listen_addr: ":8082"
@@ -6,11 +6,6 @@ base_url: "http://localhost:8082"
 cert_file: "./certs/proxy/cert.pem"
 key_file: "./certs/proxy/key.pem"
 session_secret: "a-strong-random-secret-key-here"
-
-# Identity Provider configuration
-idp_metadata_url: "http://localhost:8085/metadata"
-idp_entity_id: "http://localhost:8085/metadata"
-idp_sso_url: "http://localhost:8085/sso"
 
 # Proxy configuration
 proxy_entity_id: "http://localhost:8082/metadata"
@@ -31,3 +26,32 @@ service_providers:
       "lastName": "lastName"
       "userId": "userId"
       "roles": "roles"
+      "idpId": "idp_id"
+      "idpName": "idp_name"
+
+# Identity Provider configurations
+identity_providers:
+  - id: "default-idp"
+    name: "Default Identity Provider"
+    description: "The default organizational identity provider"
+    logo_url: "https://dummyimage.com/100x60/f5f2f5/0a1066.png&text=Default"
+    metadata_url: "http://localhost:8085/metadata"
+    entity_id: "http://localhost:8085/metadata"
+    sso_url: "http://localhost:8085/sso"
+#    default_idp: true
+
+  - id: "test-idp"
+    name: "Test Identity Provider"
+    description: "A test identity provider for development"
+    logo_url: "https://dummyimage.com/100x60/f5f2f5/0a1066.png&text=Test"
+    metadata_url: "http://localhost:8085/metadata"
+    entity_id: "http://localhost:8085/metadata"
+    sso_url: "http://localhost:8085/sso"
+
+  - id: "bi-nmelo-okta"
+    name: "BI nmelo-okta"
+    description: "Nelson's BI Tenant"
+    logo_url: "https://dummyimage.com/100x60/f5f2f5/0a1066.png&text=nmelo-okta"
+    metadata_url: "https://auth.byndid.com/saml/v0/dc90eac1-a91e-46ff-b25d-cad53d93caad/sso/metadata.xml"
+    entity_id: "https://auth.byndid.com/saml/v0/dc90eac1-a91e-46ff-b25d-cad53d93caad/sso/metadata.xml"
+    sso_url: "https://auth.byndid.com/saml/v0/dc90eac1-a91e-46ff-b25d-cad53d93caad/sso"

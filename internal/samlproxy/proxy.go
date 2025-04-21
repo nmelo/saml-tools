@@ -40,8 +40,10 @@ type SAMLRequest struct {
 	OriginalSAMLRequest string
 	RelayState          string
 	ServiceProvider     *ServiceProviderConfig
+	IdentityProvider    *IdentityProviderConfig  // The IdP selected for this request
 	RequestID           string
 	ACSUrl              string
+	CreatedAt           time.Time                // When the request was created
 }
 
 // ProxyConfig represents the configuration for the SAML proxy
@@ -51,11 +53,9 @@ type ProxyConfig struct {
 	CertFile         string                  `yaml:"cert_file"`
 	KeyFile          string                  `yaml:"key_file"`
 	SessionSecret    string                  `yaml:"session_secret"`
-	IdpMetadataURL   string                  `yaml:"idp_metadata_url"`
-	IdpEntityID      string                  `yaml:"idp_entity_id"`
-	IdpSSOURL        string                  `yaml:"idp_sso_url"`
 	ProxyEntityID    string                  `yaml:"proxy_entity_id"`
 	ServiceProviders []ServiceProviderConfig `yaml:"service_providers"`
+	IdentityProviders []IdentityProviderConfig `yaml:"identity_providers"`
 	Debug            bool                    `yaml:"debug"`
 }
 
@@ -68,7 +68,92 @@ type ServiceProviderConfig struct {
 	AttributeMap   map[string]string `yaml:"attribute_map"`
 }
 
+// IdentityProviderConfig represents configuration for an identity provider
+type IdentityProviderConfig struct {
+	ID             string `yaml:"id"`              // Unique identifier for this IdP
+	Name           string `yaml:"name"`            // Display name for the IdP
+	Description    string `yaml:"description"`     // Description to show in the selection UI
+	LogoURL        string `yaml:"logo_url"`        // Optional logo URL for the IdP
+	MetadataURL    string `yaml:"metadata_url"`    // URL to fetch IdP metadata
+	EntityID       string `yaml:"entity_id"`       // Entity ID of the IdP
+	SSOURL         string `yaml:"sso_url"`         // Single Sign-On URL of the IdP
+	DefaultIdP     bool   `yaml:"default_idp"`     // Whether this is the default IdP
+}
+
 // NewSAMLProxy creates a new SAML proxy from the given configuration file
+// CSS for the IdP selection page
+const idpSelectionCSS = `
+body {
+    font-family: Arial, sans-serif;
+    line-height: 1.6;
+    margin: 0;
+    padding: 20px;
+    background-color: #f5f5f5;
+}
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+    background-color: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+h1 {
+    text-align: center;
+    color: #333;
+    margin-bottom: 20px;
+}
+.idp-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 20px;
+    margin-top: 30px;
+}
+.idp-card {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 20px;
+    transition: transform 0.2s, box-shadow 0.2s;
+    background-color: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-decoration: none;
+    color: #333;
+}
+.idp-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+}
+.idp-logo {
+    max-width: 100px;
+    max-height: 60px;
+    margin-bottom: 15px;
+}
+.idp-name {
+    font-weight: bold;
+    font-size: 18px;
+    margin-bottom: 10px;
+}
+.idp-description {
+    text-align: center;
+    font-size: 14px;
+    color: #666;
+}
+.btn {
+    display: inline-block;
+    padding: 10px 15px;
+    background-color: #007bff;
+    color: white;
+    border-radius: 4px;
+    text-decoration: none;
+    margin-top: 15px;
+}
+.btn:hover {
+    background-color: #0069d9;
+}
+`
+
 func NewSAMLProxy(configFile string) (*SAMLProxy, error) {
 	// Load configuration
 	configData, err := os.ReadFile(configFile)
@@ -79,6 +164,11 @@ func NewSAMLProxy(configFile string) (*SAMLProxy, error) {
 	var config ProxyConfig
 	if err := yaml.Unmarshal(configData, &config); err != nil {
 		return nil, fmt.Errorf("could not parse config file: %v", err)
+	}
+
+	// Validate that we have at least one identity provider
+	if len(config.IdentityProviders) == 0 {
+		return nil, fmt.Errorf("no identity providers configured")
 	}
 
 	// Load certificate and private key
@@ -136,9 +226,21 @@ func (sp *SAMLProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sp.handleSAMLRequest(w, r)
 	case "/saml/acs":
 		sp.handleSAMLResponse(w, r)
+	case "/saml/select-idp":
+		sp.handleIdPSelection(w, r)
+	case "/saml/complete-request":
+		sp.handleCompleteRequest(w, r)
+	case "/assets/css/style.css":
+		sp.serveStaticCSS(w, r)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// Serve the CSS for the IdP selection page
+func (sp *SAMLProxy) serveStaticCSS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/css")
+	w.Write([]byte(idpSelectionCSS))
 }
 
 // Generates metadata for the proxy to be used by Service Providers
@@ -214,6 +316,106 @@ func (sp *SAMLProxy) handleMetadata(w http.ResponseWriter, r *http.Request) {
 }
 
 // Handle SAML requests from service providers
+// Handler for the IdP selection page
+func (sp *SAMLProxy) handleIdPSelection(w http.ResponseWriter, r *http.Request) {
+	// Get request ID from query param
+	requestID := r.URL.Query().Get("request_id")
+	if requestID == "" {
+		http.Error(w, "Missing request ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get the original SAML request from the tracker
+	_, exists := sp.RequestTracker[requestID]
+	if !exists {
+		http.Error(w, "Invalid or expired request ID", http.StatusBadRequest)
+		return
+	}
+
+	// Render the IdP selection template
+	html := `<!DOCTYPE html>
+<html>
+<head>
+    <title>SAML Proxy</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/assets/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>SAML Proxy</h1>
+		<h2>Select an Identity Provider</h2>
+        <p>Please select the identity provider you would like to use to sign in:</p>
+        
+        <div class="idp-grid">`
+
+	// Add each IdP as a card
+	for _, idp := range sp.Config.IdentityProviders {
+		logoHTML := ""
+		if idp.LogoURL != "" {
+			logoHTML = fmt.Sprintf(`<img src="%s" alt="%s Logo" class="idp-logo">`, idp.LogoURL, idp.Name)
+		}
+
+		html += fmt.Sprintf(`
+            <a href="/saml/complete-request?request_id=%s&idp_id=%s" class="idp-card">
+                %s
+                <div class="idp-name">%s</div>
+                <div class="idp-description">%s</div>
+            </a>`, requestID, idp.ID, logoHTML, idp.Name, idp.Description)
+	}
+
+	html += `
+        </div>
+    </div>
+</body>
+</html>`
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(html))
+}
+
+// Handler to complete the SAML request with the selected IdP
+func (sp *SAMLProxy) handleCompleteRequest(w http.ResponseWriter, r *http.Request) {
+	// Get request ID and IdP ID from query params
+	requestID := r.URL.Query().Get("request_id")
+	idpID := r.URL.Query().Get("idp_id")
+
+	if requestID == "" || idpID == "" {
+		http.Error(w, "Missing request ID or IdP ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get the original SAML request from the tracker
+	originalRequest, exists := sp.RequestTracker[requestID]
+	if !exists {
+		http.Error(w, "Invalid or expired request ID", http.StatusBadRequest)
+		return
+	}
+
+	// Find the selected IdP
+	var selectedIdP *IdentityProviderConfig
+	for i, idp := range sp.Config.IdentityProviders {
+		if idp.ID == idpID {
+			selectedIdP = &sp.Config.IdentityProviders[i]
+			break
+		}
+	}
+
+	if selectedIdP == nil {
+		http.Error(w, "Invalid IdP ID", http.StatusBadRequest)
+		return
+	}
+
+	// Update the request with the selected IdP
+	originalRequest.IdentityProvider = selectedIdP
+
+	// We need to keep using the same requestID as the key in the RequestTracker
+	// so make sure it's stored in the RelayState field
+	originalRequest.RelayState = requestID
+
+	// Now forward the request to the selected IdP
+	sp.forwardRequestToIdP(w, r, originalRequest)
+}
+
 func (sp *SAMLProxy) handleSAMLRequest(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Failed to parse request", http.StatusBadRequest)
@@ -286,23 +488,72 @@ func (sp *SAMLProxy) handleSAMLRequest(w http.ResponseWriter, r *http.Request) {
 	newRequestID := uuid.New().String()
 
 	// Store the original request for later use
-	sp.RequestTracker[newRequestID] = &SAMLRequest{
+	samlRequest := &SAMLRequest{
 		OriginalSAMLRequest: originalSAMLRequest,
 		RelayState:          relayState,
 		ServiceProvider:     serviceProvider,
 		RequestID:           authnRequest.ID,
 		ACSUrl:              authnRequest.AssertionConsumerServiceURL,
+		CreatedAt:           time.Now(),
+	}
+	sp.RequestTracker[newRequestID] = samlRequest
+
+	// Check for default IdP or if we need to show selection page
+	var defaultIdP *IdentityProviderConfig
+	for i, idp := range sp.Config.IdentityProviders {
+		if idp.DefaultIdP {
+			defaultIdP = &sp.Config.IdentityProviders[i]
+			break
+		}
+	}
+
+	// If we have a default IdP and only one IdP configured, use it directly
+	if defaultIdP != nil || len(sp.Config.IdentityProviders) == 1 {
+		// Use default IdP or the only IdP available
+		if defaultIdP == nil {
+			defaultIdP = &sp.Config.IdentityProviders[0]
+		}
+
+		samlRequest.IdentityProvider = defaultIdP
+
+		// Make sure the relay state is set to the request ID so we can retrieve it later
+		samlRequest.RelayState = newRequestID
+
+		sp.forwardRequestToIdP(w, r, samlRequest)
+		return
+	}
+
+	// If there are multiple IdPs and no default is set, redirect to selection page
+	redirectURL := fmt.Sprintf("%s/saml/select-idp?request_id=%s", sp.Config.BaseURL, newRequestID)
+	http.Redirect(w, r, redirectURL, http.StatusFound)
+}
+
+// forwardRequestToIdP forwards the SAML request to the selected Identity Provider
+func (sp *SAMLProxy) forwardRequestToIdP(w http.ResponseWriter, r *http.Request, samlRequest *SAMLRequest) {
+	if samlRequest.IdentityProvider == nil {
+		http.Error(w, "No Identity Provider selected for this request", http.StatusBadRequest)
+		return
 	}
 
 	// Create a new SAML request to the IdP
 	format := "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"
 	allowCreate := true
 	
+	// Use a time slightly in the past to account for clock drift
+	// Many IdPs have a 5-minute tolerance window
+	issueInstant := time.Now().UTC().Add(-30 * time.Second)
+	
+	// Generate a new unique ID
+	newID := samlutils.GenerateID("id-")
+	
+	// Update the stored request ID so we can recognize it in the response
+	samlRequest.RequestID = newID
+	
 	newAuthnRequest := saml.AuthnRequest{
-		ID:                          newRequestID,
-		IssueInstant:                time.Now(),
+		ID:                          newID,
+		IssueInstant:                issueInstant,
 		Version:                     "2.0",
-		Destination:                 sp.Config.IdpSSOURL,
+		Destination:                 samlRequest.IdentityProvider.SSOURL,
 		ProtocolBinding:             saml.HTTPPostBinding,
 		AssertionConsumerServiceURL: fmt.Sprintf("%s/saml/acs", sp.Config.BaseURL),
 		Issuer: &saml.Issuer{
@@ -315,6 +566,15 @@ func (sp *SAMLProxy) handleSAMLRequest(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	// Debug logging
+	if sp.Config.Debug {
+		fmt.Printf("Sending SAML request to IdP %s:\n", samlRequest.IdentityProvider.Name)
+		fmt.Printf("  ID: %s\n", newAuthnRequest.ID)
+		fmt.Printf("  IssueInstant: %s\n", newAuthnRequest.IssueInstant.Format(time.RFC3339))
+		fmt.Printf("  Destination: %s\n", newAuthnRequest.Destination)
+		fmt.Printf("  ACS URL: %s\n", newAuthnRequest.AssertionConsumerServiceURL)
+	}
+
 	// Sign the request
 	signedRequest, err := sp.signRequest(&newAuthnRequest)
 	if err != nil {
@@ -322,12 +582,17 @@ func (sp *SAMLProxy) handleSAMLRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// For debugging, print the first part of the XML
+	if sp.Config.Debug && len(signedRequest) > 100 {
+		fmt.Printf("Signed request (first 100 chars): %s\n", string(signedRequest[:100]))
+	}
+
 	// Encode the request
 	encodedRequest := base64.StdEncoding.EncodeToString(signedRequest)
 
 	// Redirect to IdP or render POST form
 	if sp.Config.Debug {
-		log.Printf("Redirecting to IdP: %s", sp.Config.IdpSSOURL)
+		log.Printf("Forwarding request to IdP: %s", samlRequest.IdentityProvider.SSOURL)
 	}
 
 	// Create POST form to IdP
@@ -350,7 +615,7 @@ func (sp *SAMLProxy) handleSAMLRequest(w http.ResponseWriter, r *http.Request) {
 			</form>
 		</body>
 		</html>
-	`, sp.Config.IdpSSOURL, encodedRequest, newRequestID)
+	`, samlRequest.IdentityProvider.SSOURL, encodedRequest, samlRequest.RelayState)
 
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(postForm))
@@ -414,6 +679,12 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 				attributes[attr.Name] = values
 			}
 		}
+	}
+
+	// Add information about which IdP was used
+	if originalRequest.IdentityProvider != nil {
+		attributes["idp_id"] = []string{originalRequest.IdentityProvider.ID}
+		attributes["idp_name"] = []string{originalRequest.IdentityProvider.Name}
 	}
 
 	// Map attributes according to service provider configuration
@@ -598,12 +869,12 @@ func (sp *SAMLProxy) signRequest(request *saml.AuthnRequest) ([]byte, error) {
 	signatureEl := etree.NewElement("ds:Signature")
 	signatureEl.CreateAttr("xmlns:ds", "http://www.w3.org/2000/09/xmldsig#")
 	authnRequestEl.InsertChildAt(1, signatureEl)
-	
+
 	// Use the utility to sign the request
 	if err := samlutils.SignElement(authnRequestEl, request.ID, sp.Certificate, sp.PrivateKey); err != nil {
 		return nil, fmt.Errorf("failed to sign SAML request: %v", err)
 	}
-	
+
 	// Return the fully signed XML document
 	return doc.WriteToBytes()
 }
@@ -635,7 +906,7 @@ func (sp *SAMLProxy) signResponse(response *saml.Response, authContext string) (
 
 	// First we'll create and sign the assertion, then add it to the response
 	var assertionEl *etree.Element
-	
+
 	// Create the assertion if present
 	if response.Assertion != nil {
 		// Create a separate document for the assertion to sign it independently
@@ -750,7 +1021,7 @@ func (sp *SAMLProxy) signResponse(response *saml.Response, authContext string) (
 		signatureEl := etree.NewElement("ds:Signature")
 		signatureEl.CreateAttr("xmlns:ds", "http://www.w3.org/2000/09/xmldsig#")
 		assertionEl.InsertChildAt(1, signatureEl)
-		
+
 		// Sign the assertion using XML digital signature
 		if err := samlutils.SignElement(assertionEl, response.Assertion.ID, sp.Certificate, sp.PrivateKey); err != nil {
 			return nil, fmt.Errorf("failed to sign assertion: %v", err)
@@ -765,7 +1036,7 @@ func (sp *SAMLProxy) signResponse(response *saml.Response, authContext string) (
 	signatureEl := etree.NewElement("ds:Signature")
 	signatureEl.CreateAttr("xmlns:ds", "http://www.w3.org/2000/09/xmldsig#")
 	respEl.InsertChildAt(1, signatureEl)
-	
+
 	// Sign the response using XML digital signature
 	if err := samlutils.SignElement(respEl, response.ID, sp.Certificate, sp.PrivateKey); err != nil {
 		return nil, fmt.Errorf("failed to sign response: %v", err)
