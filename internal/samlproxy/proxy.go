@@ -183,7 +183,7 @@ h1 {
 }
 .btn {
     display: inline-block;
-    width: 100%;
+    width: 260px;
     padding: 12px 20px;
     background-color: #007bff;
     color: white;
@@ -1078,6 +1078,7 @@ func (sp *SAMLProxy) handleIdPSelection(w http.ResponseWriter, r *http.Request) 
     <div class="container">
         <h1>SAML Proxy</h1>
 		<h2>Select an Identity Provider</h2>
+		<div><a href="/status">Status page: Set defaults</a></div>
         <p>Please select the identity provider you would like to use to sign in:</p>
         
         <div class="idp-grid">`
@@ -1146,6 +1147,7 @@ func (sp *SAMLProxy) handleIdPSelection(w http.ResponseWriter, r *http.Request) 
 
 	html += `
         </div>
+		
     </div>
 </body>
 </html>`
