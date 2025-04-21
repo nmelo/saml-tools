@@ -11,8 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/gorilla/sessions"
 )
 
 // Basic smoke test to verify compile-time correctness
@@ -68,10 +66,9 @@ func TestSAMLClientBasic(t *testing.T) {
 
 	// Create and initialize a basic client with no middleware
 	client := SAMLClient{
-		Config:       config,
-		Certificate:  certificate,
-		PrivateKey:   privateKey,
-		SessionStore: sessions.NewCookieStore([]byte("test-key-test-key-test-key-test-key")),
+		Config:      config,
+		Certificate: certificate,
+		PrivateKey:  privateKey,
 	}
 
 	// Test basic handler functions
@@ -116,4 +113,116 @@ func testLoginInvalidMethod(t *testing.T, client *SAMLClient) {
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("handleLogin didn't reject invalid method: got %v want %v", w.Code, http.StatusMethodNotAllowed)
 	}
+}
+
+// Test cookie management functions
+func TestCookieFunctions(t *testing.T) {
+	client := &SAMLClient{
+		Config: Config{
+			BaseURL: "https://example.com",
+		},
+	}
+	
+	// Test setting auth cookie
+	t.Run("SetAuthCookie", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		client.setAuthCookie(w, true)
+		
+		cookies := w.Result().Cookies()
+		if len(cookies) != 1 {
+			t.Errorf("Expected 1 cookie, got %d", len(cookies))
+			return
+		}
+		
+		if cookies[0].Name != authCookieName {
+			t.Errorf("Expected cookie name %s, got %s", authCookieName, cookies[0].Name)
+		}
+		
+		if cookies[0].Value != "true" {
+			t.Errorf("Expected cookie value 'true', got %s", cookies[0].Value)
+		}
+		
+		if !cookies[0].Secure {
+			t.Errorf("Cookie should be secure for HTTPS URLs")
+		}
+		
+		if !cookies[0].HttpOnly {
+			t.Errorf("Cookie should be HttpOnly")
+		}
+	})
+	
+	// Test setting and getting user data cookies
+	t.Run("UserDataCookie", func(t *testing.T) {
+		// Test data
+		userData := map[string]string{
+			"nameID": "test@example.com",
+			"email": "test@example.com",
+			"firstName": "Test",
+			"lastName": "User",
+			"role": "Admin",
+		}
+		
+		// Set cookie
+		w := httptest.NewRecorder()
+		client.setUserDataCookie(w, userData)
+		
+		// Get cookies from response
+		cookies := w.Result().Cookies()
+		if len(cookies) != 1 {
+			t.Errorf("Expected 1 cookie, got %d", len(cookies))
+			return
+		}
+		
+		if cookies[0].Name != userDataCookieName {
+			t.Errorf("Expected cookie name %s, got %s", userDataCookieName, cookies[0].Name)
+		}
+		
+		// Create a fake request with the cookie
+		req := httptest.NewRequest("GET", "/", nil)
+		req.AddCookie(cookies[0])
+		
+		// Get user data from cookie
+		retrievedData := getUserDataFromCookie(req)
+		
+		// Compare data
+		if len(retrievedData) != len(userData) {
+			t.Errorf("Expected %d user data items, got %d", len(userData), len(retrievedData))
+		}
+		
+		for key, expectedValue := range userData {
+			if value, ok := retrievedData[key]; !ok || value != expectedValue {
+				t.Errorf("Expected %s=%s, got %s=%s", key, expectedValue, key, value)
+			}
+		}
+	})
+	
+	// Test isAuthenticated function
+	t.Run("IsAuthenticated", func(t *testing.T) {
+		// Unauthenticated request
+		req1 := httptest.NewRequest("GET", "/", nil)
+		if client.isAuthenticated(req1) {
+			t.Errorf("Expected request to be unauthenticated")
+		}
+		
+		// Authenticated request with new cookie
+		req2 := httptest.NewRequest("GET", "/", nil)
+		req2.AddCookie(&http.Cookie{Name: authCookieName, Value: "true"})
+		if !client.isAuthenticated(req2) {
+			t.Errorf("Expected request to be authenticated with %s cookie", authCookieName)
+		}
+		
+		// Authenticated request with legacy cookie (saml-session-direct)
+		req3 := httptest.NewRequest("GET", "/", nil)
+		req3.AddCookie(&http.Cookie{Name: "saml-session-direct", Value: "authenticated"})
+		if !client.isAuthenticated(req3) {
+			t.Errorf("Expected request to be authenticated with legacy saml-session-direct cookie")
+		}
+		
+		// Authenticated request with legacy cookie (auth_status)
+		req4 := httptest.NewRequest("GET", "/", nil)
+		req4.AddCookie(&http.Cookie{Name: "auth_status", Value: "true"})
+		if !client.isAuthenticated(req4) {
+			t.Errorf("Expected request to be authenticated with legacy auth_status cookie")
+		}
+	})
 }

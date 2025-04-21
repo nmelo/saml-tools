@@ -559,8 +559,7 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 
 // Helper function to sign a SAML request
 func (sp *SAMLProxy) signRequest(request *saml.AuthnRequest) ([]byte, error) {
-	// Since the SAML library doesn't have a direct SignRequest function,
-	// we'll manually create and sign the AuthnRequest XML
+	// Create the AuthnRequest XML document
 	doc := etree.NewDocument()
 	doc.CreateProcInst("xml", `version="1.0" encoding="UTF-8"`)
 
@@ -595,45 +594,17 @@ func (sp *SAMLProxy) signRequest(request *saml.AuthnRequest) ([]byte, error) {
 		}
 	}
 
-	// Add signature template
-	signatureEl := authnRequestEl.CreateElement("ds:Signature")
+	// Add signature element at the proper position (right after Issuer)
+	signatureEl := etree.NewElement("ds:Signature")
 	signatureEl.CreateAttr("xmlns:ds", "http://www.w3.org/2000/09/xmldsig#")
+	authnRequestEl.InsertChildAt(1, signatureEl)
 	
-	signedInfoEl := signatureEl.CreateElement("ds:SignedInfo")
+	// Use the utility to sign the request
+	if err := samlutils.SignElement(authnRequestEl, request.ID, sp.Certificate, sp.PrivateKey); err != nil {
+		return nil, fmt.Errorf("failed to sign SAML request: %v", err)
+	}
 	
-	canonMethodEl := signedInfoEl.CreateElement("ds:CanonicalizationMethod")
-	canonMethodEl.CreateAttr("Algorithm", "http://www.w3.org/2001/10/xml-exc-c14n#")
-	
-	signMethodEl := signedInfoEl.CreateElement("ds:SignatureMethod")
-	signMethodEl.CreateAttr("Algorithm", "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256")
-	
-	referenceEl := signedInfoEl.CreateElement("ds:Reference")
-	referenceEl.CreateAttr("URI", "#"+request.ID)
-	
-	transformsEl := referenceEl.CreateElement("ds:Transforms")
-	
-	transform1El := transformsEl.CreateElement("ds:Transform")
-	transform1El.CreateAttr("Algorithm", "http://www.w3.org/2000/09/xmldsig#enveloped-signature")
-	
-	transform2El := transformsEl.CreateElement("ds:Transform")
-	transform2El.CreateAttr("Algorithm", "http://www.w3.org/2001/10/xml-exc-c14n#")
-	
-	digestMethodEl := referenceEl.CreateElement("ds:DigestMethod")
-	digestMethodEl.CreateAttr("Algorithm", "http://www.w3.org/2001/04/xmlenc#sha256")
-	
-	digestValueEl := referenceEl.CreateElement("ds:DigestValue")
-	digestValueEl.SetText("placeholder-digest")
-	
-	signatureValueEl := signatureEl.CreateElement("ds:SignatureValue")
-	signatureValueEl.SetText("placeholder-signature")
-	
-	keyInfoEl := signatureEl.CreateElement("ds:KeyInfo")
-	x509DataEl := keyInfoEl.CreateElement("ds:X509Data")
-	x509CertEl := x509DataEl.CreateElement("ds:X509Certificate")
-	x509CertEl.SetText(base64.StdEncoding.EncodeToString(sp.Certificate.Raw))
-	
-	// For simplicity, we'll just return the basic unsigned XML
-	// In a real implementation, you'd use a proper XML-DSig library to sign this
+	// Return the fully signed XML document
 	return doc.WriteToBytes()
 }
 
@@ -662,10 +633,17 @@ func (sp *SAMLProxy) signResponse(response *saml.Response, authContext string) (
 	statusCodeEl := statusEl.CreateElement("samlp:StatusCode")
 	statusCodeEl.CreateAttr("Value", response.Status.StatusCode.Value)
 
-	// Add Assertion if present
+	// First we'll create and sign the assertion, then add it to the response
+	var assertionEl *etree.Element
+	
+	// Create the assertion if present
 	if response.Assertion != nil {
-		assertionEl := respEl.CreateElement("saml:Assertion")
+		// Create a separate document for the assertion to sign it independently
+		assertionDoc := etree.NewDocument()
+		assertionEl = assertionDoc.CreateElement("saml:Assertion")
 		assertionEl.CreateAttr("xmlns:saml", "urn:oasis:names:tc:SAML:2.0:assertion")
+		assertionEl.CreateAttr("xmlns:xs", "http://www.w3.org/2001/XMLSchema")
+		assertionEl.CreateAttr("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance")
 		assertionEl.CreateAttr("ID", response.Assertion.ID)
 		assertionEl.CreateAttr("Version", response.Assertion.Version)
 		assertionEl.CreateAttr("IssueInstant", response.Assertion.IssueInstant.Format(samlutils.TimeFormat))
@@ -766,46 +744,33 @@ func (sp *SAMLProxy) signResponse(response *saml.Response, authContext string) (
 				}
 			}
 		}
+
+		// Now sign the assertion
+		// Create signature for assertion
+		signatureEl := etree.NewElement("ds:Signature")
+		signatureEl.CreateAttr("xmlns:ds", "http://www.w3.org/2000/09/xmldsig#")
+		assertionEl.InsertChildAt(1, signatureEl)
+		
+		// Sign the assertion using XML digital signature
+		if err := samlutils.SignElement(assertionEl, response.Assertion.ID, sp.Certificate, sp.PrivateKey); err != nil {
+			return nil, fmt.Errorf("failed to sign assertion: %v", err)
+		}
+
+		// Now add the signed assertion to the main response document
+		respEl.AddChild(assertionEl.Copy())
 	}
 
-	// Add signature template to response (similar to request)
-	signatureEl := respEl.CreateElement("ds:Signature")
+	// Now sign the entire response
+	// Create signature for response
+	signatureEl := etree.NewElement("ds:Signature")
 	signatureEl.CreateAttr("xmlns:ds", "http://www.w3.org/2000/09/xmldsig#")
+	respEl.InsertChildAt(1, signatureEl)
 	
-	signedInfoEl := signatureEl.CreateElement("ds:SignedInfo")
-	
-	canonMethodEl := signedInfoEl.CreateElement("ds:CanonicalizationMethod")
-	canonMethodEl.CreateAttr("Algorithm", "http://www.w3.org/2001/10/xml-exc-c14n#")
-	
-	signMethodEl := signedInfoEl.CreateElement("ds:SignatureMethod")
-	signMethodEl.CreateAttr("Algorithm", "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256")
-	
-	referenceEl := signedInfoEl.CreateElement("ds:Reference")
-	referenceEl.CreateAttr("URI", "#"+response.ID)
-	
-	transformsEl := referenceEl.CreateElement("ds:Transforms")
-	
-	transform1El := transformsEl.CreateElement("ds:Transform")
-	transform1El.CreateAttr("Algorithm", "http://www.w3.org/2000/09/xmldsig#enveloped-signature")
-	
-	transform2El := transformsEl.CreateElement("ds:Transform")
-	transform2El.CreateAttr("Algorithm", "http://www.w3.org/2001/10/xml-exc-c14n#")
-	
-	digestMethodEl := referenceEl.CreateElement("ds:DigestMethod")
-	digestMethodEl.CreateAttr("Algorithm", "http://www.w3.org/2001/04/xmlenc#sha256")
-	
-	digestValueEl := referenceEl.CreateElement("ds:DigestValue")
-	digestValueEl.SetText("placeholder-digest")
-	
-	signatureValueEl := signatureEl.CreateElement("ds:SignatureValue")
-	signatureValueEl.SetText("placeholder-signature")
-	
-	keyInfoEl := signatureEl.CreateElement("ds:KeyInfo")
-	x509DataEl := keyInfoEl.CreateElement("ds:X509Data")
-	x509CertEl := x509DataEl.CreateElement("ds:X509Certificate")
-	x509CertEl.SetText(base64.StdEncoding.EncodeToString(sp.Certificate.Raw))
+	// Sign the response using XML digital signature
+	if err := samlutils.SignElement(respEl, response.ID, sp.Certificate, sp.PrivateKey); err != nil {
+		return nil, fmt.Errorf("failed to sign response: %v", err)
+	}
 
-	// Return the document without true signatures
-	// In a real implementation, you'd properly sign this XML
+	// Return the fully signed document
 	return doc.WriteToBytes()
 }

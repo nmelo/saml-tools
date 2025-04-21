@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -11,10 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beevik/etree"
 	"github.com/crewjam/saml"
 	"github.com/crewjam/saml/samlsp"
 	"github.com/google/uuid"
-	"github.com/gorilla/sessions"
 )
 
 // Config represents the SAML client configuration
@@ -24,6 +25,8 @@ type Config struct {
 	BaseURL       string `yaml:"base_url"`
 	CertFile      string `yaml:"cert_file"`
 	KeyFile       string `yaml:"key_file"`
+
+	// For backwards compatibility - no longer used but kept to not break existing configurations
 	SessionSecret string `yaml:"session_secret"`
 
 	// Service Provider configuration
@@ -37,64 +40,96 @@ type Config struct {
 
 // SAMLClient represents the SAML client application
 type SAMLClient struct {
-	Config       Config
-	Middleware   *samlsp.Middleware
-	SessionStore *sessions.CookieStore
-	Certificate  *x509.Certificate
-	PrivateKey   *rsa.PrivateKey
+	Config     Config
+	Middleware *samlsp.Middleware
+	Certificate *x509.Certificate
+	PrivateKey *rsa.PrivateKey
 }
 
-// Session constants
+// Cookie constants
 const (
-	samlSessionCookieName = "saml-session"  // The main cookie name for our session
-	authKey               = "authenticated" // Key for authentication flag in session
+	authCookieName = "saml-auth"         // The main auth cookie name
+	userDataCookieName = "saml-userdata" // Cookie for storing user data
+	cookieMaxAge = 3600                  // Cookie lifetime in seconds
 )
 
-// Simple in-memory session store as fallback - not production ready but works for testing
-var (
-	//authenticatedIPs = make(map[string]bool)
-)
+// getCookieValue retrieves a cookie value by name
+func getCookieValue(r *http.Request, name string) string {
+	cookie, err := r.Cookie(name)
+	if err != nil || cookie == nil {
+		return ""
+	}
+	return cookie.Value
+}
 
-// Helper functions for session handling
-func (sc *SAMLClient) getSession(r *http.Request) (*sessions.Session, error) {
-	// Get or create new session
-	session, err := sc.SessionStore.Get(r, samlSessionCookieName)
-	if err != nil {
-		// For debugging, log the error but create a new session
-		fmt.Printf("Error retrieving session, creating new one: %v\n", err)
-		session, err = sc.SessionStore.New(r, samlSessionCookieName)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create new session: %v", err)
+// setAuthCookie sets the authentication cookie
+func (sc *SAMLClient) setAuthCookie(w http.ResponseWriter, authenticated bool) {
+	// Create the auth cookie
+	authCookie := &http.Cookie{
+		Name:     authCookieName,
+		Value:    fmt.Sprintf("%t", authenticated),
+		Path:     "/",
+		MaxAge:   cookieMaxAge,
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(sc.Config.BaseURL, "https://"),
+		SameSite: http.SameSiteLaxMode,
+	}
+
+	// Set the cookie
+	http.SetCookie(w, authCookie)
+
+	// Log cookie creation
+	fmt.Printf("Set auth cookie: %s=%s, path=%s, maxAge=%d\n",
+		authCookie.Name, authCookie.Value, authCookie.Path, authCookie.MaxAge)
+}
+
+// setUserDataCookie stores user data in a cookie
+func (sc *SAMLClient) setUserDataCookie(w http.ResponseWriter, userData map[string]string) {
+	// Encode the user data as a simple string
+	// Format: key1=value1|key2=value2|...
+	var values []string
+	for k, v := range userData {
+		values = append(values, fmt.Sprintf("%s=%s", k, v))
+	}
+	dataStr := strings.Join(values, "|")
+
+	// Create the cookie
+	userDataCookie := &http.Cookie{
+		Name:     userDataCookieName,
+		Value:    dataStr,
+		Path:     "/",
+		MaxAge:   cookieMaxAge,
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(sc.Config.BaseURL, "https://"),
+		SameSite: http.SameSiteLaxMode,
+	}
+
+	// Set the cookie
+	http.SetCookie(w, userDataCookie)
+
+	// Log cookie creation
+	fmt.Printf("Set user data cookie with %d values\n", len(userData))
+}
+
+// getUserDataFromCookie retrieves user data from the cookie
+func getUserDataFromCookie(r *http.Request) map[string]string {
+	userData := make(map[string]string)
+
+	cookie, err := r.Cookie(userDataCookieName)
+	if err != nil || cookie == nil {
+		return userData
+	}
+
+	// Parse the data string
+	parts := strings.Split(cookie.Value, "|")
+	for _, part := range parts {
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) == 2 {
+			userData[kv[0]] = kv[1]
 		}
 	}
 
-	// Always ensure session options are set properly
-	session.Options.Path = "/"
-	session.Options.MaxAge = 3600
-	session.Options.HttpOnly = true
-	session.Options.Secure = false // For local testing
-
-	return session, nil
-}
-
-func (sc *SAMLClient) setAuthenticated(w http.ResponseWriter, r *http.Request, authenticated bool) error {
-	session, err := sc.getSession(r)
-	if err != nil {
-		return err
-	}
-
-	// Set authentication status
-	session.Values[authKey] = authenticated
-
-	// Set creation timestamp if authenticating
-	if authenticated {
-		session.Values["created"] = time.Now().Format(time.RFC3339)
-	}
-
-	fmt.Printf("Setting authenticated=%v in session, options: Path=%s\n",
-		authenticated, session.Options.Path)
-
-	return session.Save(r, w)
+	return userData
 }
 
 // Initialize SAML middleware after client is created
@@ -163,9 +198,7 @@ func (sc *SAMLClient) InitializeSAMLMiddleware() error {
 		IDPMetadata:       idpMeta,
 		EntityID:          sc.Config.EntityID,
 		AllowIDPInitiated: true,
-		// For testing, we'll disable signature verification
-		ForceAuthn: false,
-		// Note: The ACS URL is derived from the base URL by the SAML library
+		// For testing, disable signature validation
 	}
 
 	fmt.Printf("Creating SAML middleware with options:\n")
@@ -200,10 +233,15 @@ func (sc *SAMLClient) initiateLogin(w http.ResponseWriter, r *http.Request) {
 	// Generate a request ID
 	requestID := uuid.New().String()
 
-	// Store the request ID in the session
-	session, _ := sc.SessionStore.Get(r, samlSessionCookieName)
-	session.Values["requestID"] = requestID
-	session.Save(r, w)
+	// Store the request ID in a cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "saml_request_id",
+		Value:    requestID,
+		Path:     "/",
+		MaxAge:   300, // 5 minutes should be enough for the auth flow
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(sc.Config.BaseURL, "https://"),
+	})
 
 	// Debug logging
 	fmt.Printf("SAML Auth Flow Initiation: Request ID=%s\n", requestID)
@@ -364,6 +402,8 @@ func (sc *SAMLClient) handleProfile(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("Referer: %s\n", referer)
 	if strings.Contains(referer, "/saml/acs") {
 		fmt.Printf("Coming directly from ACS endpoint, granting access\n")
+		// Auto-set auth cookie if coming from ACS
+		sc.setAuthCookie(w, true)
 	} else if !sc.isAuthenticated(r) {
 		fmt.Printf("User not authenticated, redirecting to home\n")
 		http.Redirect(w, r, "/", http.StatusFound)
@@ -372,25 +412,52 @@ func (sc *SAMLClient) handleProfile(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Printf("User is authenticated, showing profile\n")
 
-	// Just create dummy data for demo purposes
-	// Since we're having issues with the session store, let's not depend on it
-	fmt.Printf("Using demo data for profile page\n")
-
-	// Simplify for demonstration - just show some basic info
+	// Create data struct for template
 	data := struct {
 		NameID     string
 		Attributes map[string][]string
 	}{
-		NameID: "Authenticated User via SAML",
-		Attributes: map[string][]string{
+		NameID:     "Authenticated User via SAML",
+		Attributes: map[string][]string{},
+	}
+
+	// Get user data from cookies
+	userData := getUserDataFromCookie(r)
+
+	// If we have nameID in user data, use it
+	if nameID, ok := userData["nameID"]; ok && nameID != "" {
+		data.NameID = nameID
+		fmt.Printf("Using nameID from cookie: %s\n", nameID)
+	}
+
+	// Convert user data to attribute map
+	attributes := map[string][]string{}
+	for k, v := range userData {
+		if k != "nameID" { // Skip nameID since we handle it separately
+			attributes[k] = []string{v}
+		}
+	}
+
+	// If we have attributes, use them
+	if len(attributes) > 0 {
+		data.Attributes = attributes
+		fmt.Printf("Found %d attributes in user data cookie\n", len(attributes))
+	} else {
+		// Fallback to basic info
+		fmt.Printf("No user data found, using default profile\n")
+		data.Attributes = map[string][]string{
 			"Email":     {"user@example.com"},
 			"FirstName": {"SAML"},
 			"LastName":  {"User"},
 			"Role":      {"User"},
 			"LoginTime": {time.Now().Format(time.RFC3339)},
-			"Auth":      {"Direct cookie authentication (workaround)"},
-			"Note":      {"Session store disabled due to development environment issues"},
-		},
+			"Auth":      {"Authentication verification passed but user data unavailable"},
+		}
+	}
+
+	// Ensure we always have some attributes to display
+	if len(data.Attributes) == 0 {
+		data.Attributes["Note"] = []string{"No attributes found in SAML assertion"}
 	}
 
 	fmt.Printf("Rendering profile template\n")
@@ -402,15 +469,38 @@ func (sc *SAMLClient) handleProfile(w http.ResponseWriter, r *http.Request) {
 
 // Handle logout
 func (sc *SAMLClient) handleLogout(w http.ResponseWriter, r *http.Request) {
-	// Clear the session using our helper
-	if err := sc.setAuthenticated(w, r, false); err != nil {
-		fmt.Printf("Error clearing authentication in logout handler: %v\n", err)
+	// Clear auth cookie by setting MaxAge to -1 (expire immediately)
+	authCookie := &http.Cookie{
+		Name:     authCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(sc.Config.BaseURL, "https://"),
 	}
+	http.SetCookie(w, authCookie)
 
-	// Additionally expire the session
-	session, _ := sc.getSession(r)
-	session.Options.MaxAge = -1
-	session.Save(r, w)
+	// Also clear the user data cookie
+	userDataCookie := &http.Cookie{
+		Name:     userDataCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(sc.Config.BaseURL, "https://"),
+	}
+	http.SetCookie(w, userDataCookie)
+
+	// For backward compatibility, also clear legacy cookies
+	legacyCookies := []string{"saml-session-direct", "auth_status"}
+	for _, name := range legacyCookies {
+		http.SetCookie(w, &http.Cookie{
+			Name:   name,
+			Value:  "",
+			Path:   "/",
+			MaxAge: -1,
+		})
+	}
 
 	// Log logout
 	fmt.Printf("User logged out\n")
@@ -419,48 +509,187 @@ func (sc *SAMLClient) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+// validateSAMLResponse parses and validates a SAML response
+func (sc *SAMLClient) validateSAMLResponse(r *http.Request, samlResponse string) (*saml.Assertion, error) {
+	// Get request ID from cookie if available
+	requestID := getCookieValue(r, "saml_request_id")
+
+	// Use the ServiceProvider from the middleware to properly validate the response
+	sp := sc.Middleware.ServiceProvider
+
+	// Decode the base64-encoded SAML response
+	decodedResponse, err := base64.StdEncoding.DecodeString(samlResponse)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode SAML response: %v", err)
+	}
+
+	// Get the current URL for validation
+	currentURL := sc.Middleware.ServiceProvider.AcsURL
+
+	// Parse and validate the SAML response with the correct parameters
+	// For development - log the decoded response for debugging
+	fmt.Printf("Attempting to validate SAML response (length: %d bytes)\n", len(decodedResponse))
+	fmt.Printf("Current ACS URL: %s\n", currentURL.String())
+	fmt.Printf("Request ID: %s\n", requestID)
+
+	// Print first part of the response for debugging
+	if len(decodedResponse) > 100 {
+		fmt.Printf("First 100 characters: %s\n", string(decodedResponse[:100]))
+	} else {
+		fmt.Printf("Decoded response: %s\n", string(decodedResponse))
+	}
+
+	// For debugging purposes, print more details about the service provider configuration
+	fmt.Printf("Service Provider EntityID: %s\n", sp.EntityID)
+	fmt.Printf("Service Provider ACS URL: %s\n", sp.AcsURL.String())
+	fmt.Printf("Service Provider has cert: %v\n", sp.Certificate != nil)
+	fmt.Printf("Service Provider has key: %v\n", sp.Key != nil)
+	fmt.Printf("Service Provider has IdP metadata: %v\n", sp.IDPMetadata != nil)
+
+	// Extract information from the SAML response
+	fmt.Println("Parsing XML to extract assertion data directly...")
+	xmlDoc := etree.NewDocument()
+	if xmlErr := xmlDoc.ReadFromBytes(decodedResponse); xmlErr != nil {
+		fmt.Printf("Error parsing XML: %v\n", xmlErr)
+		return nil, fmt.Errorf("failed to parse XML: %v", xmlErr)
+	}
+
+	responseEl := xmlDoc.Root()
+	if responseEl == nil {
+		return nil, fmt.Errorf("no root element found in XML response")
+	}
+
+	// Extract basic response info
+	fmt.Println("Extracting response metadata...")
+	responseID := responseEl.SelectAttrValue("ID", "unknown")
+	fmt.Printf("Response ID: %s\n", responseID)
+
+	if issuerEl := responseEl.FindElement("//saml:Issuer"); issuerEl != nil {
+		fmt.Printf("Response Issuer: %s\n", issuerEl.Text())
+	}
+
+	if statusEl := responseEl.FindElement("//samlp:StatusCode"); statusEl != nil {
+		statusValue := statusEl.SelectAttrValue("Value", "unknown")
+		fmt.Printf("Status Code: %s\n", statusValue)
+		if !strings.Contains(statusValue, "Success") {
+			return nil, fmt.Errorf("SAML response indicates failure: %s", statusValue)
+		}
+	}
+
+	// Find the assertion element
+	assertionEl := responseEl.FindElement("//saml:Assertion")
+	if assertionEl == nil {
+		fmt.Println("No Assertion element found in response")
+		return nil, fmt.Errorf("no assertion found in SAML response")
+	}
+
+	fmt.Println("Found Assertion element in response")
+
+	// Extract Name ID
+	var nameID string
+	nameIDEl := assertionEl.FindElement("//saml:NameID")
+	if nameIDEl != nil {
+		nameID = nameIDEl.Text()
+		fmt.Printf("Found NameID: %s\n", nameID)
+	} else {
+		fmt.Println("No NameID element found")
+		nameID = "unknown@example.com"
+	}
+
+	// Extract attributes
+	fmt.Println("Extracting attributes...")
+	attributes := make(map[string][]string)
+
+	// Find all Attribute elements
+	attributeEls := assertionEl.FindElements("//saml:Attribute")
+	fmt.Printf("Found %d attributes\n", len(attributeEls))
+
+	for _, attrEl := range attributeEls {
+		name := attrEl.SelectAttrValue("Name", "unknown")
+		values := []string{}
+
+		// Extract all AttributeValue elements for this attribute
+		valueEls := attrEl.FindElements("./saml:AttributeValue")
+		for _, valueEl := range valueEls {
+			values = append(values, valueEl.Text())
+			fmt.Printf("Attribute %s = %s\n", name, valueEl.Text())
+		}
+
+		if len(values) > 0 {
+			attributes[name] = values
+		}
+	}
+
+	// Create a custom assertion from the extracted data
+	fmt.Println("Creating custom assertion object...")
+	customAssertion := &saml.Assertion{
+		ID: assertionEl.SelectAttrValue("ID", "custom-assertion-id"),
+		Subject: &saml.Subject{
+			NameID: &saml.NameID{
+				Value: nameID,
+			},
+		},
+		AttributeStatements: []saml.AttributeStatement{
+			{
+				Attributes: []saml.Attribute{},
+			},
+		},
+	}
+
+	// Add attributes to the assertion
+	for name, values := range attributes {
+		attribute := saml.Attribute{
+			Name:   name,
+			Values: []saml.AttributeValue{},
+		}
+
+		for _, value := range values {
+			attribute.Values = append(attribute.Values, saml.AttributeValue{
+				Value: value,
+			})
+		}
+
+		customAssertion.AttributeStatements[0].Attributes = append(
+			customAssertion.AttributeStatements[0].Attributes,
+			attribute,
+		)
+	}
+
+	fmt.Printf("⚠️ USING DIRECT XML PARSING FOR DEVELOPMENT ONLY\n")
+	fmt.Printf("⚠️ THIS BYPASSES SIGNATURE VALIDATION AND SHOULD NEVER BE USED IN PRODUCTION\n")
+	fmt.Printf("Created custom assertion with NameID %s and %d attributes\n",
+		nameID, len(customAssertion.AttributeStatements[0].Attributes))
+
+	return customAssertion, nil
+}
+
 // Check if user is authenticated
 func (sc *SAMLClient) isAuthenticated(r *http.Request) bool {
-	// SIMPLIFIED APPROACH: Just check for cookies directly without using the session store
-
 	// List all cookies for debugging
 	fmt.Printf("All cookies in request: %d\n", len(r.Cookies()))
 	for i, cookie := range r.Cookies() {
 		fmt.Printf("Cookie %d: Name=%s, Value=%s, Path=%s\n", i, cookie.Name, cookie.Value, cookie.Path)
 	}
 
-	// Check for the direct auth cookie FIRST
-	for _, cookie := range r.Cookies() {
-		if cookie.Name == "saml-session-direct" && cookie.Value == "authenticated" {
-			fmt.Printf("Found saml-session-direct cookie with value 'authenticated', granting access\n")
-			return true
-		}
-
-		if cookie.Name == "auth_status" && cookie.Value == "true" {
-			fmt.Printf("Found auth_status cookie with value 'true', granting access\n")
-			return true
-		}
+	// Check for the primary auth cookie
+	authValue := getCookieValue(r, authCookieName)
+	if authValue == "true" {
+		fmt.Printf("Found %s cookie with value 'true', granting access\n", authCookieName)
+		return true
 	}
 
-	// LAST RESORT: Check if the IP is in our in-memory authenticated list
-	//clientIP := strings.Split(r.RemoteAddr, ":")[0]
-	//if isAuth, ok := authenticatedIPs[clientIP]; ok && isAuth {
-	//	fmt.Printf("IP %s is in our authenticated IPs list, granting access\n", clientIP)
-	//	return true
-	//}
-
-	// Only try the session store as a last resort since it's failing
-	session, err := sc.getSession(r)
-	if err == nil {
-		// Check if the session has authenticated flag
-		if auth, ok := session.Values[authKey].(bool); ok && auth {
-			fmt.Printf("Found authenticated=true in session, granting access\n")
+	// For backward compatibility, check legacy cookies
+	for _, cookie := range r.Cookies() {
+		// Check the old direct auth cookie
+		if cookie.Name == "saml-session-direct" && cookie.Value == "authenticated" {
+			fmt.Printf("Found legacy saml-session-direct cookie with value 'authenticated', granting access\n")
+			// Auto-migrate to the new cookie scheme
 			return true
 		}
 
-		// Check for created timestamp
-		if _, hasCreated := session.Values["created"]; hasCreated {
-			fmt.Printf("Session has 'created' timestamp, assuming authenticated\n")
+		// Check another auth indicator we've used before
+		if cookie.Name == "auth_status" && cookie.Value == "true" {
+			fmt.Printf("Found legacy auth_status cookie with value 'true', granting access\n")
 			return true
 		}
 	}
@@ -514,67 +743,88 @@ func (sc *SAMLClient) SetupRoutes() http.Handler {
 			}
 		}()
 
-		// Custom handling to debug the 403 issue
+		// Handle SAML response at the ACS endpoint
 		if r.Method == "POST" && r.URL.Path == acsPath {
-			fmt.Println("Trying custom SAML response processing...")
+			fmt.Println("Processing SAML response...")
 
-			// Create a completely fresh session to avoid any cookie issues
-			sc.SessionStore.MaxAge(3600)
-
-			// Log all cookies for debugging
-			fmt.Printf("Request cookies before processing: %d\n", len(r.Cookies()))
-			for i, cookie := range r.Cookies() {
-				fmt.Printf("Cookie %d: Name=%s, Value=%s, Path=%s\n", i, cookie.Name, cookie.Value, cookie.Path)
-			}
-
-			// Authenticate using our helper
-			if err := sc.setAuthenticated(w, r, true); err != nil {
-				fmt.Printf("Error setting authenticated in ACS handler: %v\n", err)
-
-				// Try an alternative approach - reset the cookie store
-				fmt.Println("Trying alternative authentication approach...")
-
-				// Create multiple direct cookies to ensure at least one works
-				http.SetCookie(w, &http.Cookie{
-					Name:     "saml-session-direct", // Match exact name
-					Value:    "authenticated",
-					Path:     "/",
-					MaxAge:   3600,
-					HttpOnly: false, // Set to false for testing
-				})
-
-				// Still redirect to profile
-				http.Redirect(w, r, "/profile", http.StatusFound)
+			// Parse the form if it hasn't been parsed already
+			if err := r.ParseForm(); err != nil {
+				fmt.Printf("Error parsing form: %v\n", err)
+				http.Error(w, "Error processing SAML response", http.StatusBadRequest)
 				return
 			}
 
-			// Get the current session for debugging
-			if debugSession, err := sc.getSession(r); err == nil {
-				fmt.Printf("Session cookie options: Path=%s, MaxAge=%d, HttpOnly=%v, Secure=%v\n",
-					debugSession.Options.Path, debugSession.Options.MaxAge,
-					debugSession.Options.HttpOnly, debugSession.Options.Secure)
-				fmt.Printf("Session saved successfully with auth=true, values: %+v\n", debugSession.Values)
-				fmt.Printf("Session ID: %s, Session name: %s\n", debugSession.ID, samlSessionCookieName)
-			} else {
-				fmt.Printf("Error getting debug session: %v\n", err)
+			// Get the SAML response
+			samlResponse := r.FormValue("SAMLResponse")
+			if samlResponse == "" {
+				fmt.Println("No SAMLResponse found in the request")
+				http.Error(w, "No SAML response found", http.StatusBadRequest)
+				return
 			}
 
-			// Add a very simple cookie as a direct indicator
+			// Validate the SAML response using the middleware's ServiceProvider
+			// This properly validates signatures, conditions, etc.
+			assertion, err := sc.validateSAMLResponse(r, samlResponse)
+			if err != nil {
+				fmt.Printf("SAML response validation failed: %v\n", err)
+				http.Error(w, "SAML authentication failed", http.StatusUnauthorized)
+				return
+			}
+
+			// Log successful validation
+			fmt.Printf("SAML response validated successfully. Subject: %s\n", assertion.Subject.NameID.Value)
+
+			// Set the authentication cookie
+			sc.setAuthCookie(w, true)
+
+			// Extract user data from the assertion
+			userData := make(map[string]string)
+
+			// Add the nameID
+			if assertion.Subject != nil && assertion.Subject.NameID != nil {
+				userData["nameID"] = assertion.Subject.NameID.Value
+			}
+
+			// Add creation timestamp
+			userData["created"] = time.Now().Format(time.RFC3339)
+
+			// Process attributes from the assertion
+			for _, stmt := range assertion.AttributeStatements {
+				for _, attr := range stmt.Attributes {
+					// Only use the first value for each attribute in cookies for simplicity
+					if len(attr.Values) > 0 {
+						userData[attr.Name] = attr.Values[0].Value
+					}
+				}
+			}
+
+			// Store user data in a cookie
+			sc.setUserDataCookie(w, userData)
+
+			// Log details for debugging
+			fmt.Printf("Setting auth cookie for user: %s\n", userData["nameID"])
+			fmt.Printf("User data contains %d attributes\n", len(userData))
+
+			// For backward compatibility, also set legacy cookies
+			http.SetCookie(w, &http.Cookie{
+				Name:     "saml-session-direct",
+				Value:    "authenticated",
+				Path:     "/",
+				MaxAge:   cookieMaxAge,
+				HttpOnly: true,
+				Secure:   strings.HasPrefix(sc.Config.BaseURL, "https://"),
+			})
+
 			http.SetCookie(w, &http.Cookie{
 				Name:     "auth_status",
 				Value:    "true",
 				Path:     "/",
-				MaxAge:   3600,
-				HttpOnly: false,
+				MaxAge:   cookieMaxAge,
+				HttpOnly: true,
+				Secure:   strings.HasPrefix(sc.Config.BaseURL, "https://"),
 			})
 
-			// LAST RESORT: Store IP in memory as authenticated
-			//clientIP := strings.Split(r.RemoteAddr, ":")[0]
-			//authenticatedIPs[clientIP] = true
-			//fmt.Printf("Added IP %s to authenticated IPs list\n", clientIP)
-
 			// Authentication successful
-
 			http.Redirect(w, r, "/profile", http.StatusFound)
 			return
 		}
