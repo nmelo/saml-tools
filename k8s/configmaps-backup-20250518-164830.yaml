@@ -1,0 +1,188 @@
+apiVersion: v1
+items:
+- apiVersion: v1
+  data:
+    fix-key.sh: |
+      #!/bin/sh
+
+      # Create a temporary directory
+      mkdir -p /tmp/keys
+
+      # Copy the original cert and key files
+      cp /app/certs/idp/cert.pem /tmp/keys/
+      cp /app/certs/idp/key.pem /tmp/keys/
+
+      # Detect key format and convert if needed
+      grep -q "BEGIN PRIVATE KEY" /app/certs/idp/key.pem
+      if [ $? -eq 0 ]; then
+        echo "Detected PKCS8 format, converting to PKCS1..."
+        openssl pkcs8 -in /app/certs/idp/key.pem -nocrypt -out /tmp/keys/key.pem
+      else
+        echo "Key appears to be in PKCS1 format already."
+      fi
+
+      # Replace the original keys with our converted ones
+      cp /tmp/keys/cert.pem /app/certs/idp/cert.pem
+      cp /tmp/keys/key.pem /app/certs/idp/key.pem
+
+      # Set proper permissions
+      chmod 600 /app/certs/idp/key.pem
+      echo "Key conversion complete."
+  kind: ConfigMap
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","data":{"fix-key.sh":"#!/bin/sh\n\n# Create a temporary directory\nmkdir -p /tmp/keys\n\n# Copy the original cert and key files\ncp /app/certs/idp/cert.pem /tmp/keys/\ncp /app/certs/idp/key.pem /tmp/keys/\n\n# Detect key format and convert if needed\ngrep -q \"BEGIN PRIVATE KEY\" /app/certs/idp/key.pem\nif [ $? -eq 0 ]; then\n  echo \"Detected PKCS8 format, converting to PKCS1...\"\n  openssl pkcs8 -in /app/certs/idp/key.pem -nocrypt -out /tmp/keys/key.pem\nelse\n  echo \"Key appears to be in PKCS1 format already.\"\nfi\n\n# Replace the original keys with our converted ones\ncp /tmp/keys/cert.pem /app/certs/idp/cert.pem\ncp /tmp/keys/key.pem /app/certs/idp/key.pem\n\n# Set proper permissions\nchmod 600 /app/certs/idp/key.pem\necho \"Key conversion complete.\"\n"},"kind":"ConfigMap","metadata":{"annotations":{},"name":"fix-script","namespace":"saml-tools"}}
+    creationTimestamp: "2025-04-20T07:07:43Z"
+    name: fix-script
+    namespace: saml-tools
+    resourceVersion: "61212"
+    uid: 220b0fcd-104a-46fe-bc68-3fb67c1b1b0b
+- apiVersion: v1
+  data:
+    ca.crt: |
+      -----BEGIN CERTIFICATE-----
+      MIIDJzCCAg+gAwIBAgICBnUwDQYJKoZIhvcNAQELBQAwMzEVMBMGA1UEChMMRGln
+      aXRhbE9jZWFuMRowGAYDVQQDExFrOHNhYXMgQ2x1c3RlciBDQTAeFw0yNTA0MjAw
+      MjQyNDZaFw00NTA0MjAwMjQyNDZaMDMxFTATBgNVBAoTDERpZ2l0YWxPY2VhbjEa
+      MBgGA1UEAxMRazhzYWFzIENsdXN0ZXIgQ0EwggEiMA0GCSqGSIb3DQEBAQUAA4IB
+      DwAwggEKAoIBAQCxIXzXQSenArw9y6YYPW2fQPlF9ahHmP/3VFV8Yme3ibvm0tqz
+      ehusFxZRXrZrstX1mSDkKYSwxZABWg3BKqzlw22FEoSQvQzkGXiDCop9z4ydybcG
+      3VyjdZ99MHVPkEtHhHnv7bjT9vlmPBq3kSG1WUWp21CQWJqZ+Enczap+Fz3B2H/N
+      /gx5CDd/fzg1S0eOc7sinBOKvZmYH24zTQPS7PYAi+FUUS9ytGlLQv30Y2kvRX0j
+      xJCVpW9BhaRiqiAPUZxZh1bynEgph/pnLz/FYrQaEad8bJzhxdNeYrJ+L46Hqf/l
+      ZmANCPYDyd8we4HOF/yci1/RQrBxMr8yzzLxAgMBAAGjRTBDMA4GA1UdDwEB/wQE
+      AwIBhjASBgNVHRMBAf8ECDAGAQH/AgEAMB0GA1UdDgQWBBQRng+Me/z3wKMLjj3M
+      QFYmZvbX+jANBgkqhkiG9w0BAQsFAAOCAQEAWntPL6lMPcZJtWk81b7Q3w52Bnln
+      Os8kF6m8Y3bKS8Pl28Jy/X3S9OK3CdGMoQPpSL9V6xVHk5yGH7tUXkp5FD9eaHMP
+      qwmGmCxSD4KlptG6QYtJwCFIBtrqwaIgQFr3zBkVxiM+fS15S5f4gszT8lUGS1w4
+      pY+VQGyLOD0OlaLj3h6gPw6n/e9Y2IsdaR6wkokm3ETdTM+t6a973ak6Wqt0Doem
+      kBqfjzoRpYw5eQx2u0vMBgE/L2SPeAwS4fIscQwa6/CuEsAyI8s5lgRtu1iz5rNs
+      kKbmjkoJe7d5wR/bmVgDBrzcMqtIUDXHJspZuagLPJiIxkNVIzgBK/7KGg==
+      -----END CERTIFICATE-----
+  kind: ConfigMap
+  metadata:
+    annotations:
+      kubernetes.io/description: Contains a CA bundle that can be used to verify the
+        kube-apiserver when using internal endpoints such as the internal service
+        IP or kubernetes.default.svc. No other usage is guaranteed across distributions
+        of Kubernetes clusters.
+    creationTimestamp: "2025-04-20T03:31:28Z"
+    name: kube-root-ca.crt
+    namespace: saml-tools
+    resourceVersion: "10648"
+    uid: 9fb842ed-69ff-4eee-b18c-4366e721b9b0
+- apiVersion: v1
+  data:
+    samlclient.yaml: |
+      # SAML Client Configuration
+      listen_addr: ":8080"
+      base_url: "https://client.saml-tester.com"
+      cert_file: "/app/certs/client/cert.pem"
+      key_file: "/app/certs/client/key.pem"
+      session_secret: "client-strong-secret-key-here"
+      entity_id: "urn:samlclient:sp"
+      assertion_consumer_service_url: "https://client.saml-tester.com/saml/acs"
+      metadata_path: "/saml/metadata"
+      idp_metadata_url: "https://proxy.saml-tester.com/metadata"
+  kind: ConfigMap
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","data":{"samlclient.yaml":"# SAML Client Configuration\nlisten_addr: \":8080\"\nbase_url: \"https://client.saml-tester.com\"\ncert_file: \"/app/certs/client/cert.pem\"\nkey_file: \"/app/certs/client/key.pem\"\nsession_secret: \"client-strong-secret-key-here\"\nentity_id: \"urn:samlclient:sp\"\nassertion_consumer_service_url: \"https://client.saml-tester.com/saml/acs\"\nmetadata_path: \"/saml/metadata\"\nidp_metadata_url: \"https://proxy.saml-tester.com/metadata\"\n"},"kind":"ConfigMap","metadata":{"annotations":{},"name":"samlclient-config","namespace":"saml-tools"}}
+    creationTimestamp: "2025-04-20T03:31:39Z"
+    name: samlclient-config
+    namespace: saml-tools
+    resourceVersion: "336110"
+    uid: 6696f142-a45d-4277-8483-666117a323e8
+- apiVersion: v1
+  data:
+    samlidp.yaml: |
+      # SAML Identity Provider Configuration
+      listen_addr: ":8085"
+      base_url: "https://idp.saml-tester.com"
+      cert_file: "/app/certs/idp/cert.pem"
+      key_file: "/app/certs/idp/key.pem"
+      session_secret: "idp-strong-secret-key-here"
+      entity_id: "https://idp.saml-tester.com/metadata"
+      metadata_path: "/metadata"
+      sso_service_path: "/sso"
+      users:
+        - username: "admin"
+          password: "admin123"
+          attributes:
+            email: "admin@example.com"
+            firstName: "Admin"
+            lastName: "User"
+            roles: ["admin", "user"]
+            userId: "1001"
+        - username: "user"
+          password: "user123"
+          attributes:
+            email: "user@example.com"
+            firstName: "Regular"
+            lastName: "User"
+            roles: ["user"]
+            userId: "1002"
+  kind: ConfigMap
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","data":{"samlidp.yaml":"# SAML Identity Provider Configuration\nlisten_addr: \":8085\"\nbase_url: \"https://idp.saml-tester.com\"\ncert_file: \"/app/certs/idp/cert.pem\"\nkey_file: \"/app/certs/idp/key.pem\"\nsession_secret: \"idp-strong-secret-key-here\"\nentity_id: \"https://idp.saml-tester.com/metadata\"\nmetadata_path: \"/metadata\"\nsso_service_path: \"/sso\"\nusers:\n  - username: \"admin\"\n    password: \"admin123\"\n    attributes:\n      email: \"admin@example.com\"\n      firstName: \"Admin\"\n      lastName: \"User\"\n      roles: [\"admin\", \"user\"]\n      userId: \"1001\"\n  - username: \"user\"\n    password: \"user123\"\n    attributes:\n      email: \"user@example.com\"\n      firstName: \"Regular\"\n      lastName: \"User\"\n      roles: [\"user\"]\n      userId: \"1002\"\n"},"kind":"ConfigMap","metadata":{"annotations":{},"name":"samlidp-config","namespace":"saml-tools"}}
+    creationTimestamp: "2025-04-20T03:31:39Z"
+    name: samlidp-config
+    namespace: saml-tools
+    resourceVersion: "336108"
+    uid: 358177cf-f5e1-46aa-ae75-97ae0a7a0c3e
+- apiVersion: v1
+  data:
+    samlproxy.yaml: "# SAML Proxy Configuration with Multiple IdPs\nlisten_addr: \":8082\"\nbase_url:
+      \"https://proxy.saml-tester.com\"\ncert_file: \"/app/certs/proxy/cert.pem\"\nkey_file:
+      \"/app/certs/proxy/key.pem\"\nsession_secret: \"proxy-strong-secret-key-here\"\nproxy_entity_id:
+      \"https://proxy.saml-tester.com/metadata\"\ndebug: true\n\n# Service Provider
+      configurations\nservice_providers:\n  - name: \"SAML Client\"\n    entity_id:
+      \"urn:samlclient:sp\"\n    acs_url: \"https://client.saml-tester.com/saml/acs\"\n
+      \   metadata_xml_url: \"https://client.saml-tester.com/saml/metadata\"\n    attribute_map:\n
+      \     \"email\": \"email\"\n      \"username\": \"username\"\n      \"firstName\":
+      \"firstName\"\n      \"lastName\": \"lastName\"\n      \"userId\": \"userId\"\n
+      \     \"roles\": \"roles\"\n      \"idpId\": \"idp_id\"\n      \"idpName\":
+      \"idp_name\"\n      \n  - name: \"Salesforce\"\n    entity_id: \"https://beyondidentity-dev-ed.develop.my.salesforce.com\"\n
+      \   acs_url: \"https://beyondidentity-dev-ed.develop.my.salesforce.com\"\n    metadata_xml_url:
+      \"https://beyondidentity-dev-ed.develop.my.salesforce.com/metadata\"\n    attribute_map:\n
+      \     \"email\": \"email\"\n      \"username\": \"username\"\n      \"firstName\":
+      \"firstName\"\n      \"lastName\": \"lastName\"\n      \"userId\": \"userId\"\n
+      \     \"roles\": \"roles\"\n      \"idpId\": \"idp_id\"\n      \"idpName\":
+      \"idp_name\"\n\n  - name: \"Cloudflare\"\n    entity_id: \"https://nmeloco.cloudflareaccess.com/cdn-cgi/access/callback\"\n
+      \   acs_url: \"https://nmeloco.cloudflareaccess.com/cdn-cgi/access/callback\"\n
+      \   metadata_xml_url: \"https://nmeloco.cloudflareaccess.com/cdn-cgi/access/d4fe8bad-e654-4ce9-b4ff-fae8bd0e2eeb/saml-metadata\"\n
+      \   attribute_map:\n      \"email\": \"email\"\n      \"username\": \"username\"\n
+      \     \"firstName\": \"firstName\"\n      \"lastName\": \"lastName\"\n      \"userId\":
+      \"userId\"\n      \"roles\": \"roles\"\n      \"idpId\": \"idp_id\"\n      \"idpName\":
+      \"idp_name\"\n\n# Identity Provider configurations\nidentity_providers:\n  -
+      id: \"local-idp\"\n    name: \"Local Test IDP\"\n    description: \"The local
+      test identity provider\"\n    logo_url: \"https://dummyimage.com/100x60/f5f2f5/0a1066.png&text=Test\"\n
+      \   metadata_url: \"https://idp.saml-tester.com/metadata\"\n    entity_id: \"https://idp.saml-tester.com/metadata\"\n
+      \   sso_url: \"https://idp.saml-tester.com/sso\"\n    default_idp: false\n\n
+      \ - id: \"bi-nmelo-okta\"\n    name: \"BI Tenant\"\n    description: \"ByndID
+      Authentication Tenant\"\n    logo_url: \"https://dummyimage.com/100x60/f5f2f5/0a1066.png&text=ByndID\"\n
+      \   metadata_url: \"https://auth.byndid.com/saml/v0/1470ea33-4f1b-4b75-b9be-5be1fe607b36/sso/metadata.xml\"\n
+      \   entity_id: \"https://auth.byndid.com/saml/v0/1470ea33-4f1b-4b75-b9be-5be1fe607b36/sso/metadata.xml\"\n
+      \   sso_url: \"https://auth.byndid.com/saml/v0/1470ea33-4f1b-4b75-b9be-5be1fe607b36/sso\"\n
+      \   \n  - id: \"dev-okta\"\n    name: \"Dev Okta\"\n    description: \"Dev Okta
+      Tenant\"\n    logo_url: \"https://dummyimage.com/100x60/f5f2f5/0a1066.png&text=Okta\"\n
+      \   metadata_url: \"https://dev-115454.okta.com/app/exkr2tmr94AKZAnv64x7/sso/saml/metadata\"\n
+      \   entity_id: \"http://www.okta.com/exkr2tmr94AKZAnv64x7\"\n    sso_url: \"https://dev-115454.okta.com/app/dev-115454_samlproxyonkube_1/exkr2tmr94AKZAnv64x7/sso/saml\"\n"
+  kind: ConfigMap
+  metadata:
+    annotations:
+      description: Updated with multiple IdP support and BI Tenant configuration
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","data":{"samlproxy.yaml":"# SAML Proxy Configuration with Multiple IdPs\nlisten_addr: \":8082\"\nbase_url: \"https://proxy.saml-tester.com\"\ncert_file: \"/app/certs/proxy/cert.pem\"\nkey_file: \"/app/certs/proxy/key.pem\"\nsession_secret: \"proxy-strong-secret-key-here\"\nproxy_entity_id: \"https://proxy.saml-tester.com/metadata\"\ndebug: true\n\n# Service Provider configurations\nservice_providers:\n  - name: \"SAML Client\"\n    entity_id: \"urn:samlclient:sp\"\n    acs_url: \"https://client.saml-tester.com/saml/acs\"\n    metadata_xml_url: \"https://client.saml-tester.com/saml/metadata\"\n    attribute_map:\n      \"email\": \"email\"\n      \"username\": \"username\"\n      \"firstName\": \"firstName\"\n      \"lastName\": \"lastName\"\n      \"userId\": \"userId\"\n      \"roles\": \"roles\"\n      \"idpId\": \"idp_id\"\n      \"idpName\": \"idp_name\"\n      \n  - name: \"Salesforce\"\n    entity_id: \"https://beyondidentity-dev-ed.develop.my.salesforce.com\"\n    acs_url: \"https://beyondidentity-dev-ed.develop.my.salesforce.com\"\n    metadata_xml_url: \"https://beyondidentity-dev-ed.develop.my.salesforce.com/metadata\"\n    attribute_map:\n      \"email\": \"email\"\n      \"username\": \"username\"\n      \"firstName\": \"firstName\"\n      \"lastName\": \"lastName\"\n      \"userId\": \"userId\"\n      \"roles\": \"roles\"\n      \"idpId\": \"idp_id\"\n      \"idpName\": \"idp_name\"\n\n  - name: \"Cloudflare\"\n    entity_id: \"https://nmeloco.cloudflareaccess.com/cdn-cgi/access/callback\"\n    acs_url: \"https://nmeloco.cloudflareaccess.com/cdn-cgi/access/callback\"\n    metadata_xml_url: \"https://nmeloco.cloudflareaccess.com/cdn-cgi/access/d4fe8bad-e654-4ce9-b4ff-fae8bd0e2eeb/saml-metadata\"\n    attribute_map:\n      \"email\": \"email\"\n      \"username\": \"username\"\n      \"firstName\": \"firstName\"\n      \"lastName\": \"lastName\"\n      \"userId\": \"userId\"\n      \"roles\": \"roles\"\n      \"idpId\": \"idp_id\"\n      \"idpName\": \"idp_name\"\n\n# Identity Provider configurations\nidentity_providers:\n  - id: \"local-idp\"\n    name: \"Local Test IDP\"\n    description: \"The local test identity provider\"\n    logo_url: \"https://dummyimage.com/100x60/f5f2f5/0a1066.png\u0026text=Test\"\n    metadata_url: \"https://idp.saml-tester.com/metadata\"\n    entity_id: \"https://idp.saml-tester.com/metadata\"\n    sso_url: \"https://idp.saml-tester.com/sso\"\n    default_idp: false\n\n  - id: \"bi-nmelo-okta\"\n    name: \"BI Tenant\"\n    description: \"ByndID Authentication Tenant\"\n    logo_url: \"https://dummyimage.com/100x60/f5f2f5/0a1066.png\u0026text=ByndID\"\n    metadata_url: \"https://auth.byndid.com/saml/v0/1470ea33-4f1b-4b75-b9be-5be1fe607b36/sso/metadata.xml\"\n    entity_id: \"https://auth.byndid.com/saml/v0/1470ea33-4f1b-4b75-b9be-5be1fe607b36/sso/metadata.xml\"\n    sso_url: \"https://auth.byndid.com/saml/v0/1470ea33-4f1b-4b75-b9be-5be1fe607b36/sso\"\n    \n  - id: \"dev-okta\"\n    name: \"Dev Okta\"\n    description: \"Dev Okta Tenant\"\n    logo_url: \"https://dummyimage.com/100x60/f5f2f5/0a1066.png\u0026text=Okta\"\n    metadata_url: \"https://dev-115454.okta.com/app/exkr2tmr94AKZAnv64x7/sso/saml/metadata\"\n    entity_id: \"http://www.okta.com/exkr2tmr94AKZAnv64x7\"\n    sso_url: \"https://dev-115454.okta.com/app/dev-115454_samlproxyonkube_1/exkr2tmr94AKZAnv64x7/sso/saml\"\n"},"kind":"ConfigMap","metadata":{"annotations":{"description":"Updated with multiple IdP support and BI Tenant configuration"},"name":"samlproxy-config","namespace":"saml-tools"}}
+    creationTimestamp: "2025-04-20T03:31:39Z"
+    name: samlproxy-config
+    namespace: saml-tools
+    resourceVersion: "353568"
+    uid: c864a75d-0afa-4007-91db-18b26bd0a68b
+kind: List
+metadata:
+  resourceVersion: ""

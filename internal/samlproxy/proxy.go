@@ -92,122 +92,86 @@ body {
     font-family: Arial, sans-serif;
     line-height: 1.6;
     margin: 0;
-    padding: 20px;
+    padding: 0;
     background-color: #f5f5f5;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
 }
 .container {
-    max-width: 1200px;
-    margin: 0 auto;
     background-color: #fff;
-    padding: 20px;
+    padding: 40px;
     border-radius: 8px;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    text-align: center;
+    max-width: 500px;
+    width: 100%;
 }
 h1, h2, h3 {
     color: #333;
+	margin-bottom: -20px;
 }
 h1 {
     text-align: center;
     margin-bottom: 20px;
 }
-.idp-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(550px, 1fr));
-    gap: 30px;
+.idp-list {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
     margin-top: 30px;
 }
 .idp-card {
-    border: 1px solid #ddd;
-    border-radius: 8px;
-    padding: 20px;
-    transition: transform 0.2s, box-shadow 0.2s;
-    background-color: #fff;
-    color: #333;
-    text-decoration: none;
-    display: block;
-}
-.idp-card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
-}
-.idp-header {
     display: flex;
     align-items: center;
-    margin-bottom: 15px;
-    border-bottom: 1px solid #eee;
-    padding-bottom: 15px;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 20px;
+    background-color: #fff;
+    transition: all 0.2s;
+    cursor: pointer;
+    text-decoration: none;
+    color: inherit;
+}
+.idp-card:hover {
+    border-color: #007bff;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
 }
 .idp-logo {
-    max-width: 100px;
-    max-height: 60px;
+    width: 60px;
+    height: 60px;
     margin-right: 20px;
+    border-radius: 8px;
+    background-color: #f8f9fa;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    font-weight: bold;
+    color: #007bff;
 }
-.idp-title {
+.idp-info {
     flex: 1;
+    text-align: left;
 }
 .idp-name {
+    font-size: 18px;
     font-weight: bold;
-    font-size: 20px;
+    color: #333;
     margin-bottom: 5px;
-    color: #2c3e50;
 }
 .idp-description {
     font-size: 14px;
     color: #666;
-    margin-bottom: 10px;
 }
-.idp-params {
-    background-color: #f8f9fa;
-    border-radius: 6px;
-    padding: 15px;
-    margin-top: 15px;
+.status-link {
+    color: #007bff;
+    text-decoration: none;
     font-size: 14px;
 }
-.param-group {
-    margin-bottom: 15px;
-}
-.param-label {
-    font-weight: bold;
-    color: #495057;
-    margin-bottom: 5px;
-    display: block;
-}
-.param-value {
-    font-family: monospace;
-    background-color: #fff;
-    padding: 6px 10px;
-    border-radius: 4px;
-    border: 1px solid #e9ecef;
-    color: #495057;
-    word-break: break-all;
-}
-.btn {
-    display: inline-block;
-    width: 260px;
-    padding: 12px 20px;
-    background-color: #007bff;
-    color: white;
-    border-radius: 4px;
-    text-decoration: none;
-    margin-top: 20px;
-    text-align: center;
-    font-weight: bold;
-    transition: background-color 0.2s;
-}
-.btn:hover {
-    background-color: #0069d9;
-}
-.badge {
-    display: inline-block;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: bold;
-    margin-left: 10px;
-}
-.badge-default {
-    background-color: #28a745;
-    color: white;
+.status-link:hover {
+    text-decoration: underline;
 }
 `
 
@@ -1076,78 +1040,48 @@ func (sp *SAMLProxy) handleIdPSelection(w http.ResponseWriter, r *http.Request) 
 </head>
 <body>
     <div class="container">
-        <h1>SAML Proxy</h1>
-		<h2>Select an Identity Provider</h2>
-		<div><a href="/status">Status page: Set defaults</a></div>
-        <p>Please select the identity provider you would like to use to sign in:</p>
-        
-        <div class="idp-grid">`
+        <h2>Login with:</h2>
+        <div class="idp-list">
+`
 
 	// Add each IdP as a card with detailed parameters
 	for _, idp := range sp.Config.IdentityProviders {
-		logoHTML := ""
-		if idp.LogoURL != "" {
-			logoHTML = fmt.Sprintf(`<img src="%s" alt="%s Logo" class="idp-logo">`, idp.LogoURL, idp.Name)
-		}
-
-		// Default badge if applicable
-		defaultBadge := ""
-		if idp.DefaultIdP {
-			defaultBadge = `<span class="badge badge-default">Default</span>`
-		}
+		// Create a safe ID for HTML elements
+		safeID := strings.ReplaceAll(idp.ID, " ", "_")
+		safeID = strings.ReplaceAll(safeID, ".", "_")
+		safeID = strings.ReplaceAll(safeID, "-", "_")
 
 		// Build IdP card with detailed parameters
+		var logoContent string
+		if idp.LogoURL != "" {
+			logoContent = fmt.Sprintf(`<img src="%s" alt="%s logo" style="max-width: 100%%; max-height: 100%%;">`, idp.LogoURL, idp.Name)
+		} else {
+			// Use first letter as fallback logo
+			logoContent = string(idp.Name[0])
+		}
+		
 		html += fmt.Sprintf(`
-            <div class="idp-card">
-                <div class="idp-header">
-                    %s
-                    <div class="idp-title">
-                        <div class="idp-name">%s %s</div>
+            <div>
+                <a href="/saml/complete-request?request_id=%s&idp_id=%s" class="idp-card">
+                    <div class="idp-logo">
+                        %s
+                    </div>
+                    <div class="idp-info">
+                        <div class="idp-name">%s</div>
                         <div class="idp-description">%s</div>
                     </div>
-                </div>
-                
-                <div class="idp-params">
-                    <div class="param-group">
-                        <span class="param-label">ID</span>
-                        <div class="param-value">%s</div>
-                    </div>
-                    
-                    <div class="param-group">
-                        <span class="param-label">Entity ID</span>
-                        <div class="param-value">%s</div>
-                    </div>
-                    
-                    <div class="param-group">
-                        <span class="param-label">SSO URL</span>
-                        <div class="param-value">%s</div>
-                    </div>
-                    
-                    <div class="param-group">
-                        <span class="param-label">Metadata URL</span>
-                        <div class="param-value">%s</div>
-                    </div>
-                </div>
-                
-                <a href="/saml/complete-request?request_id=%s&idp_id=%s" class="btn">
-                    Select this Identity Provider
                 </a>
             </div>`,
-            logoHTML,
-            idp.Name,
-            defaultBadge,
-            idp.Description,
-            idp.ID,
-            idp.EntityID,
-            idp.SSOURL,
-            idp.MetadataURL,
             requestID,
-            idp.ID)
+            idp.ID,
+            logoContent,
+            idp.Name,
+            idp.Description)
 	}
 
 	html += `
         </div>
-		
+	<p><a href="/status" class="status-link">Set defaults</a></p>
     </div>
 </body>
 </html>`

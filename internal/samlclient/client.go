@@ -270,57 +270,133 @@ var loginTmpl = template.Must(template.New("login").Parse(`
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>SAML Client - Login</title>
+    <title>Demo App</title>
     <style>
         body {
             font-family: Arial, sans-serif;
-            margin: 40px;
-            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
         }
         .container {
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
+            background-color: #fff;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
         }
-        .idp-info {
-            background-color: #e6f7ff;
-            border: 1px solid #91d5ff;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 24px;
         }
         button {
-            background-color: #4CAF50;
+            background-color: #007bff;
             color: white;
-            padding: 10px 15px;
+            padding: 15px 40px;
             border: none;
             border-radius: 4px;
             cursor: pointer;
-            font-size: 16px;
+            font-size: 18px;
+            width: 100%;
+            transition: background-color 0.2s;
+            margin-bottom: 20px;
         }
         button:hover {
-            background-color: #45a049;
+            background-color: #0069d9;
+        }
+        .details-link {
+            color: #666;
+            text-decoration: none;
+            font-size: 14px;
+            display: inline-block;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+        .details-link:hover {
+            color: #333;
+            text-decoration: underline;
+        }
+        .details {
+            display: none;
+            text-align: left;
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 4px;
+            margin-top: 20px;
+            font-size: 14px;
+        }
+        .details.show {
+            display: block;
+        }
+        .detail-item {
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #e9ecef;
+        }
+        .detail-item:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+        .detail-label {
+            font-weight: bold;
+            color: #495057;
+            display: block;
+            margin-bottom: 5px;
+        }
+        .detail-value {
+            color: #6c757d;
+            word-break: break-all;
+            font-family: monospace;
+            font-size: 13px;
         }
     </style>
+    <script>
+        function toggleDetails() {
+            const details = document.getElementById('details');
+            const link = document.getElementById('details-link');
+            if (details.classList.contains('show')) {
+                details.classList.remove('show');
+                link.textContent = 'Show details';
+            } else {
+                details.classList.add('show');
+                link.textContent = 'Hide details';
+            }
+            return false;
+        }
+    </script>
 </head>
 <body>
     <div class="container">
-        <h1>SAML Client - Test Application</h1>
-        <p>This is a test SAML Service Provider application.</p>
+        <h1>Demo App</h1>
         
-        <div class="idp-info">
-            <h2>Identity Provider Configuration</h2>
-            <p><strong>IdP Metadata URL:</strong> {{.IdPMetadataURL}}</p>
-            <p><strong>SP Entity ID:</strong> {{.SPEntityID}}</p>
-            <p><strong>SP ACS URL:</strong> {{.ACSURL}}</p>
-        </div>
-        
-        <p>Click the button below to login via the SAML Proxy:</p>
         <form method="post" action="/login">
-            <button type="submit">Login via SAML</button>
+            <button type="submit">Login</button>
         </form>
+        
+        <a href="#" id="details-link" class="details-link" onclick="return toggleDetails()">Show details</a>
+        
+        <div id="details" class="details">
+            <div class="detail-item">
+                <span class="detail-label">IdP Metadata URL</span>
+                <span class="detail-value">{{.IdPMetadataURL}}</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">SP Entity ID</span>
+                <span class="detail-value">{{.SPEntityID}}</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">SP ACS URL</span>
+                <span class="detail-value">{{.ACSURL}}</span>
+            </div>
+        </div>
     </div>
 </body>
 </html>
@@ -335,93 +411,187 @@ var profileTmpl = template.Must(template.New("profile").Parse(`
     <style>
         body {
             font-family: Arial, sans-serif;
-            margin: 40px;
-            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
         }
         .container {
             max-width: 800px;
             margin: 0 auto;
-            padding: 20px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         }
-        .attribute {
+        h1 {
+            color: #333;
             margin-bottom: 10px;
-            padding: 10px;
-            background-color: #f9f9f9;
-            border-radius: 4px;
+            font-size: 24px;
+        }
+        .user-info {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 16px;
+        }
+        .user-info strong {
+            color: #333;
         }
         .section {
-            margin-top: 30px;
+            margin-bottom: 30px;
+        }
+        h2 {
+            color: #333;
+            font-size: 18px;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #e9ecef;
+            padding-bottom: 10px;
+        }
+        .attributes-table {
+            width: 100%;
+            border-collapse: collapse;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .attributes-table th {
+            background-color: #e9ecef;
+            padding: 12px 15px;
+            text-align: left;
+            font-weight: bold;
+            color: #495057;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .attributes-table td {
+            padding: 12px 15px;
+            color: #6c757d;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .attributes-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+        .attributes-table tbody tr:hover {
+            background-color: #e9ecef;
+        }
+        .details-toggle {
+            color: #007bff;
+            text-decoration: none;
+            font-size: 14px;
+            cursor: pointer;
+            display: inline-block;
+            margin-bottom: 15px;
+        }
+        .details-toggle:hover {
+            text-decoration: underline;
+        }
+        .technical-details {
+            display: none;
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 4px;
             margin-bottom: 20px;
         }
-        .idp-info {
-            background-color: #e6f7ff;
-            border: 1px solid #91d5ff;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
+        .technical-details.show {
+            display: block;
         }
-        .idp-config {
+        .detail-row {
+            margin-bottom: 10px;
+        }
+        .detail-label {
+            font-weight: bold;
+            color: #495057;
+        }
+        .detail-value {
+            color: #6c757d;
             font-family: monospace;
-            white-space: pre-wrap;
+            font-size: 13px;
             word-break: break-all;
-            margin-top: 10px;
-            padding: 10px;
-            background-color: #f8f8f8;
-            border-radius: 3px;
-            border: 1px solid #ddd;
         }
         .logout {
             display: inline-block;
-            background-color: #f44336;
+            background-color: #dc3545;
             color: white;
-            padding: 10px 15px;
+            padding: 10px 20px;
             text-decoration: none;
             border-radius: 4px;
             margin-top: 20px;
+            transition: background-color 0.2s;
         }
         .logout:hover {
-            background-color: #d32f2f;
+            background-color: #c82333;
+        }
+        .no-attributes {
+            color: #6c757d;
+            font-style: italic;
         }
     </style>
+    <script>
+        function toggleTechnicalDetails() {
+            const details = document.getElementById('technical-details');
+            const link = document.getElementById('technical-details-link');
+            if (details.classList.contains('show')) {
+                details.classList.remove('show');
+                link.textContent = 'Show technical details';
+            } else {
+                details.classList.add('show');
+                link.textContent = 'Hide technical details';
+            }
+            return false;
+        }
+    </script>
 </head>
 <body>
     <div class="container">
-        <h1>SAML Client - Profile</h1>
-        <p>You are logged in as <strong>{{.NameID}}</strong></p>
+        <h1>Profile</h1>
+        <p class="user-info">Logged in as: <strong>{{.NameID}}</strong></p>
         
-        <!-- Identity Provider Information -->
         <div class="section">
-            <h2>Identity Provider Information</h2>
-            <div class="idp-info">
-                <p><strong>IdP Entity ID:</strong> {{.IdPEntityID}}</p>
-                <p><strong>IdP Metadata URL:</strong> {{.IdPMetadataURL}}</p>
-                
-                <h3>Service Provider Configuration</h3>
-                <p><strong>SP Entity ID:</strong> {{.SPEntityID}}</p>
-                <p><strong>SP ACS URL:</strong> {{.ACSURL}}</p>
+            <h2>User Attributes</h2>
+            {{if .Attributes}}
+                <table class="attributes-table">
+                    <thead>
+                        <tr>
+                            <th>Attribute</th>
+                            <th>Value</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range $key, $values := .Attributes}}
+                            <tr>
+                                <td>{{$key}}</td>
+                                <td>{{range $i, $v := $values}}{{if $i}}, {{end}}{{$v}}{{end}}</td>
+                            </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            {{else}}
+                <p class="no-attributes">No attributes received from the identity provider</p>
+            {{end}}
+        </div>
+		<a href="/logout" class="logout">Logout</a>
+        <br><br><br>	
+
+        <a href="#" id="technical-details-link" class="details-toggle" onclick="return toggleTechnicalDetails()">Show technical details</a>
+        
+        <div id="technical-details" class="technical-details">
+            <div class="detail-row">
+                <span class="detail-label">IdP Entity ID:</span>
+                <span class="detail-value">{{.IdPEntityID}}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">IdP Metadata URL:</span>
+                <span class="detail-value">{{.IdPMetadataURL}}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">SP Entity ID:</span>
+                <span class="detail-value">{{.SPEntityID}}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">SP ACS URL:</span>
+                <span class="detail-value">{{.ACSURL}}</span>
             </div>
         </div>
         
-        <!-- SAML Attributes -->
-        <div class="section">
-            <h2>SAML Attributes</h2>
-            {{range $key, $values := .Attributes}}
-                <div class="attribute">
-                    <strong>{{$key}}:</strong>
-                    <ul>
-                        {{range $values}}
-                            <li>{{.}}</li>
-                        {{end}}
-                    </ul>
-                </div>
-            {{else}}
-                <p>No attributes provided</p>
-            {{end}}
-        </div>
         
-        <a href="/logout" class="logout">Logout</a>
     </div>
 </body>
 </html>
@@ -450,7 +620,7 @@ func (sc *SAMLClient) handleHome(w http.ResponseWriter, r *http.Request) {
 		SPEntityID:     sc.Config.EntityID,
 		ACSURL:         sc.Config.AssertionConsumerServiceURL,
 	}
-	
+
 	loginTmpl.Execute(w, data)
 }
 
@@ -647,6 +817,8 @@ func (sc *SAMLClient) validateSAMLResponse(r *http.Request, samlResponse string)
 
 	if issuerEl := responseEl.FindElement("//saml:Issuer"); issuerEl != nil {
 		fmt.Printf("Response Issuer: %s\n", issuerEl.Text())
+	} else if issuerEl := responseEl.FindElement("//saml2:Issuer"); issuerEl != nil {
+		fmt.Printf("Response Issuer: %s\n", issuerEl.Text())
 	}
 
 	if statusEl := responseEl.FindElement("//samlp:StatusCode"); statusEl != nil {
@@ -655,20 +827,37 @@ func (sc *SAMLClient) validateSAMLResponse(r *http.Request, samlResponse string)
 		if !strings.Contains(statusValue, "Success") {
 			return nil, fmt.Errorf("SAML response indicates failure: %s", statusValue)
 		}
+	} else if statusEl := responseEl.FindElement("//saml2p:StatusCode"); statusEl != nil {
+		statusValue := statusEl.SelectAttrValue("Value", "unknown")
+		fmt.Printf("Status Code: %s\n", statusValue)
+		if !strings.Contains(statusValue, "Success") {
+			return nil, fmt.Errorf("SAML response indicates failure: %s", statusValue)
+		}
 	}
 
-	// Find the assertion element
+	// Find the assertion element - try both saml:Assertion and saml2:Assertion
 	assertionEl := responseEl.FindElement("//saml:Assertion")
 	if assertionEl == nil {
-		fmt.Println("No Assertion element found in response")
-		return nil, fmt.Errorf("no assertion found in SAML response")
+		// Try the saml2 namespace if saml namespace didn't work
+		assertionEl = responseEl.FindElement("//saml2:Assertion")
+		if assertionEl == nil {
+			fmt.Println("No Assertion element found in response (tried both saml: and saml2: namespaces)")
+			return nil, fmt.Errorf("no assertion found in SAML response")
+		}
+		fmt.Println("Found saml2:Assertion element in response")
+	} else {
+		fmt.Println("Found saml:Assertion element in response")
 	}
 
 	fmt.Println("Found Assertion element in response")
 
-	// Extract Name ID
+	// Extract Name ID - try both saml:NameID and saml2:NameID
 	var nameID string
-	nameIDEl := assertionEl.FindElement("//saml:NameID")
+	nameIDEl := assertionEl.FindElement(".//saml:NameID")
+	if nameIDEl == nil {
+		// Try the saml2 namespace
+		nameIDEl = assertionEl.FindElement(".//saml2:NameID")
+	}
 	if nameIDEl != nil {
 		nameID = nameIDEl.Text()
 		fmt.Printf("Found NameID: %s\n", nameID)
@@ -681,16 +870,23 @@ func (sc *SAMLClient) validateSAMLResponse(r *http.Request, samlResponse string)
 	fmt.Println("Extracting attributes...")
 	attributes := make(map[string][]string)
 
-	// Find all Attribute elements
-	attributeEls := assertionEl.FindElements("//saml:Attribute")
+	// Find all Attribute elements - try both saml:Attribute and saml2:Attribute
+	attributeEls := assertionEl.FindElements(".//saml:Attribute")
+	if len(attributeEls) == 0 {
+		// Try the saml2 namespace
+		attributeEls = assertionEl.FindElements(".//saml2:Attribute")
+	}
 	fmt.Printf("Found %d attributes\n", len(attributeEls))
 
 	for _, attrEl := range attributeEls {
 		name := attrEl.SelectAttrValue("Name", "unknown")
 		values := []string{}
 
-		// Extract all AttributeValue elements for this attribute
+		// Extract all AttributeValue elements for this attribute - try both namespaces
 		valueEls := attrEl.FindElements("./saml:AttributeValue")
+		if len(valueEls) == 0 {
+			valueEls = attrEl.FindElements("./saml2:AttributeValue")
+		}
 		for _, valueEl := range valueEls {
 			values = append(values, valueEl.Text())
 			fmt.Printf("Attribute %s = %s\n", name, valueEl.Text())
@@ -848,7 +1044,7 @@ func (sc *SAMLClient) SetupRoutes() http.Handler {
 			assertion, err := sc.validateSAMLResponse(r, samlResponse)
 			if err != nil {
 				fmt.Printf("SAML response validation failed: %v\n", err)
-				http.Error(w, "SAML authentication failed", http.StatusUnauthorized)
+				http.Error(w, fmt.Sprintf("SAML authentication failed:  %v\n", err), http.StatusUnauthorized)
 				return
 			}
 
