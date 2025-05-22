@@ -13,6 +13,10 @@ proxy_entity_id: "http://samlproxy:8082/metadata"
 # Debug mode
 debug: true
 
+# Health check interval in seconds for Identity Providers (e.g., 60 for 1 minute).
+# If not specified, defaults to 60 seconds.
+health_check_interval_seconds: 60
+
 # Service Provider configurations
 service_providers:
   - name: "SAML Client"
@@ -66,6 +70,9 @@ identity_providers:
     metadata_url: "https://auth.byndid.com/saml/v0/38e2efe8-6891-48cd-a36d-560aa4999918/sso/metadata.xml"
     entity_id: "https://auth.byndid.com/saml/v0/38e2efe8-6891-48cd-a36d-560aa4999918/sso/metadata.xml"
     sso_url: "https://auth.byndid.com/saml/v0/38e2efe8-6891-48cd-a36d-560aa4999918/sso"
+    # Optional: URL for health check. If not provided or empty, metadata_url will be used for the health check.
+    # Replace with a specific health check endpoint for this IdP if available.
+    health_check_url: "https://auth.byndid.com/healthz" # Example: using a hypothetical health endpoint
 
   - id: "bi-v1-demo"
     name: "Secure Access"
@@ -82,6 +89,9 @@ identity_providers:
     metadata_url: "https://dev-115454.okta.com/app/exkr2t2cpcWXWtnqN4x7/sso/saml/metadata"
     entity_id: "http://www.okta.com/exkr2t2cpcWXWtnqN4x7"
     sso_url: "https://dev-115454.okta.com/app/dev-115454_samlproxy_1/exkr2t2cpcWXWtnqN4x7/sso/saml"
+    # Optional: health_check_url. If omitted or left empty, metadata_url is used by default for health checks.
+    # For Okta, their metadata URL often serves as a good basic health indicator.
+    # health_check_url: ""
 
   - id: "test-idp"
     name: "Test IDP"

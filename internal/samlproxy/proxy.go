@@ -83,6 +83,22 @@ type IdentityProviderConfig struct {
 	EntityID       string `yaml:"entity_id"`       // Entity ID of the IdP
 	SSOURL         string `yaml:"sso_url"`         // Single Sign-On URL of the IdP
 	DefaultIdP     bool   `yaml:"default_idp"`     // Whether this is the default IdP
+	HealthCheckURL string `yaml:"health_check_url,omitempty"` // URL for health check
+	IsHealthy      bool   `yaml:"-"`                         // Current health status, not from YAML
+}
+
+// ProxyConfig represents the configuration for the SAML proxy
+type ProxyConfig struct {
+	ListenAddr               string                  `yaml:"listen_addr"`
+	BaseURL                  string                  `yaml:"base_url"`
+	CertFile                 string                  `yaml:"cert_file"`
+	KeyFile                  string                  `yaml:"key_file"`
+	SessionSecret            string                  `yaml:"session_secret"`
+	ProxyEntityID            string                  `yaml:"proxy_entity_id"`
+	ServiceProviders         []ServiceProviderConfig `yaml:"service_providers"`
+	IdentityProviders        []IdentityProviderConfig `yaml:"identity_providers"`
+	Debug                    bool                    `yaml:"debug"`
+	HealthCheckIntervalSeconds int                     `yaml:"health_check_interval_seconds,omitempty"`
 }
 
 // NewSAMLProxy creates a new SAML proxy from the given configuration file
@@ -225,13 +241,86 @@ func NewSAMLProxy(configFile string) (*SAMLProxy, error) {
 	sessionStore.Options.Secure = !strings.HasPrefix(config.BaseURL, "http://")
 	sessionStore.Options.SameSite = http.SameSiteLaxMode
 
-	return &SAMLProxy{
+	// Initialize IsHealthy for all IdPs to true
+	for i := range config.IdentityProviders {
+		config.IdentityProviders[i].IsHealthy = true
+	}
+
+	// Set default health check interval if not specified
+	if config.HealthCheckIntervalSeconds == 0 {
+		config.HealthCheckIntervalSeconds = 60 // Default to 60 seconds
+	}
+
+	sp := &SAMLProxy{
 		Config:         config,
 		Certificate:    certificate,
 		PrivateKey:     keyPair.PrivateKey.(*rsa.PrivateKey),
 		SessionStore:   sessionStore,
 		RequestTracker: make(map[string]*SAMLRequest),
-	}, nil
+	}
+
+	// Launch background health checking goroutine
+	go sp.startIdPHealthChecks()
+
+	return sp, nil
+}
+
+// checkIdPHealth performs a health check for a given IdP
+func (sp *SAMLProxy) checkIdPHealth(idp *IdentityProviderConfig) bool {
+	checkURL := idp.HealthCheckURL
+	if checkURL == "" {
+		checkURL = idp.MetadataURL
+	}
+
+	if checkURL == "" {
+		log.Printf("IdP [%s] has no HealthCheckURL or MetadataURL configured, skipping health check.", idp.Name)
+		return true // Consider healthy if no URL to check
+	}
+
+	client := http.Client{
+		Timeout: 10 * time.Second, // 10-second timeout for health check
+	}
+
+	resp, err := client.Get(checkURL)
+	if err != nil {
+		log.Printf("IdP [%s] is unhealthy: error during health check to %s: %v", idp.Name, checkURL, err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		log.Printf("IdP [%s] is healthy (status code %d from %s)", idp.Name, resp.StatusCode, checkURL)
+		return true
+	}
+
+	log.Printf("IdP [%s] is unhealthy: received status code %d from %s", idp.Name, resp.StatusCode, checkURL)
+	return false
+}
+
+// startIdPHealthChecks starts a goroutine to periodically check IdP health
+func (sp *SAMLProxy) startIdPHealthChecks() {
+	// Perform an initial health check for all IdPs
+	for i := range sp.Config.IdentityProviders {
+		idp := &sp.Config.IdentityProviders[i] // Get a pointer to the IdP config
+		idp.IsHealthy = sp.checkIdPHealth(idp)
+	}
+
+	// Start periodic health checks
+	ticker := time.NewTicker(time.Duration(sp.Config.HealthCheckIntervalSeconds) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if sp.Config.Debug {
+				log.Println("Running periodic IdP health checks...")
+			}
+			for i := range sp.Config.IdentityProviders {
+				idp := &sp.Config.IdentityProviders[i] // Get a pointer to the IdP config
+				idp.IsHealthy = sp.checkIdPHealth(idp)
+			}
+		}
+	}
 }
 
 // ServeHTTP implements the http.Handler interface for the SAML proxy
@@ -611,6 +700,7 @@ func (sp *SAMLProxy) handleStatus(w http.ResponseWriter, r *http.Request) {
 						<th>SSO URL</th>
 						<th>Metadata URL</th>
 						<th>Default</th>
+						<th>Status</th>
 					</tr>
 				</thead>
 				<tbody>`,
@@ -628,6 +718,12 @@ func (sp *SAMLProxy) handleStatus(w http.ResponseWriter, r *http.Request) {
 		if idp.DefaultIdP {
 			defaultBadge = "✓"
 		}
+		statusBadge := ""
+		if idp.IsHealthy {
+			statusBadge = `<span class="badge" style="background-color: #28a745;">Healthy</span>`
+		} else {
+			statusBadge = `<span class="badge" style="background-color: #dc3545;">Unhealthy</span>`
+		}
 
 		html += fmt.Sprintf(`
 					<tr>
@@ -637,13 +733,15 @@ func (sp *SAMLProxy) handleStatus(w http.ResponseWriter, r *http.Request) {
 						<td class="param-value">%s</td>
 						<td class="param-value">%s</td>
 						<td class="param-value">%s</td>
+						<td>%s</td>
 					</tr>`,
 			idp.ID,
 			idp.Name,
 			idp.EntityID,
 			idp.SSOURL,
 			idp.MetadataURL,
-			defaultBadge)
+			defaultBadge,
+			statusBadge)
 	}
 
 	// Close IdP table and add SP table
@@ -1043,9 +1141,18 @@ func (sp *SAMLProxy) handleIdPSelection(w http.ResponseWriter, r *http.Request) 
         <h2>Login with:</h2>
         <div class="idp-list">
 `
-
+	healthyIdPsAvailable := false
 	// Add each IdP as a card with detailed parameters
 	for _, idp := range sp.Config.IdentityProviders {
+		// Only show healthy IdPs in the selection list
+		if !idp.IsHealthy {
+			if sp.Config.Debug {
+				log.Printf("IdP [%s] is unhealthy, skipping from selection page.", idp.Name)
+			}
+			continue
+		}
+		healthyIdPsAvailable = true // Mark that at least one healthy IdP was found
+
 		// Create a safe ID for HTML elements
 		safeID := strings.ReplaceAll(idp.ID, " ", "_")
 		safeID = strings.ReplaceAll(safeID, ".", "_")
@@ -1077,6 +1184,10 @@ func (sp *SAMLProxy) handleIdPSelection(w http.ResponseWriter, r *http.Request) 
             logoContent,
             idp.Name,
             idp.Description)
+	}
+
+	if !healthyIdPsAvailable {
+		html += `<p>No identity providers are currently available. Please try again later or contact an administrator.</p>`
 	}
 
 	html += `
@@ -1119,6 +1230,13 @@ func (sp *SAMLProxy) handleCompleteRequest(w http.ResponseWriter, r *http.Reques
 
 	if selectedIdP == nil {
 		http.Error(w, "Invalid IdP ID", http.StatusBadRequest)
+		return
+	}
+
+	// Check if the selected IdP is healthy before proceeding
+	if !selectedIdP.IsHealthy {
+		log.Printf("Attempt to use unhealthy IdP [%s] for request ID [%s]", selectedIdP.Name, requestID)
+		http.Error(w, fmt.Sprintf("The selected Identity Provider '%s' is currently unavailable. Please try again later or contact support.", selectedIdP.Name), http.StatusServiceUnavailable)
 		return
 	}
 
@@ -1246,59 +1364,96 @@ func (sp *SAMLProxy) handleSAMLRequest(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if idp.ID == serviceProvider.DefaultIdP {
-				selectedIdP = &sp.Config.IdentityProviders[i]
-				foundMatch = true
-				fmt.Printf("Using SP-specific default IdP: %s (%s) for SP: %s\n",
-					idp.Name, idp.ID, serviceProvider.Name)
-				break
-			}
-		}
-
-		if !foundMatch && sp.Config.Debug {
-			fmt.Printf("WARNING: Could not find configured default IdP with ID: '%s'\n",
-				serviceProvider.DefaultIdP)
-		}
-	}
-
-	// If no SP-specific default was found, fall back to global default
-	if selectedIdP == nil {
-		for i, idp := range sp.Config.IdentityProviders {
-			if idp.DefaultIdP {
-				selectedIdP = &sp.Config.IdentityProviders[i]
-				if sp.Config.Debug {
-					fmt.Printf("Using global default IdP: %s (%s)\n", idp.Name, idp.ID)
+				// Ensure the IdP is healthy before selecting it as default
+				if sp.Config.IdentityProviders[i].IsHealthy {
+					selectedIdP = &sp.Config.IdentityProviders[i]
+					foundMatch = true
+					log.Printf("Using SP-specific default IdP: %s (%s) for SP: %s (Healthy: %t)\n",
+						idp.Name, idp.ID, serviceProvider.Name, selectedIdP.IsHealthy)
+				} else {
+					// This is the case where the SP-specific default IdP is configured but unhealthy.
+					log.Printf("Configured default IdP [%s] for SP [%s] is unhealthy. Will attempt fallback.", idp.Name, serviceProvider.Name)
+					// selectedIdP remains nil, so we fall through to global default or selection page.
 				}
-				break
+				break // Found the configured default IdP (by ID), break regardless of its health.
+			}
+		}
+
+		if !foundMatch && sp.Config.Debug { // Configured DefaultIdP ID does not exist
+			log.Printf("WARNING: Service Provider [%s] is configured with DefaultIdP ID [%s], but no such IdP exists.", serviceProvider.Name, serviceProvider.DefaultIdP)
+		}
+		// If foundMatch is true but selectedIdP is still nil, it means the SP-specific default IdP is unhealthy.
+		// No explicit action needed here as selectedIdP being nil handles the fall-through.
+	}
+
+	// If no SP-specific healthy default was found (either not configured, ID invalid, or configured IdP is unhealthy), fall back to global default
+	if selectedIdP == nil {
+		log.Printf("Attempting to find a healthy global default IdP for SP [%s].", serviceProvider.Name)
+		for i, idp := range sp.Config.IdentityProviders {
+			if idp.DefaultIdP { // Check if this IdP is marked as a global default
+				if idp.IsHealthy {
+					selectedIdP = &sp.Config.IdentityProviders[i]
+					log.Printf("Using global default IdP: %s (%s) for SP: %s (Healthy: %t)\n", idp.Name, idp.ID, serviceProvider.Name, idp.IsHealthy)
+					break // Found a healthy global default
+				} else {
+					log.Printf("Global default IdP [%s] is unhealthy. Will continue searching for other defaults or fall back for SP [%s].", idp.Name, serviceProvider.Name)
+					// Continue, in case there are multiple global defaults (though unusual)
+				}
+			}
+		}
+		if selectedIdP == nil {
+			log.Printf("No healthy global default IdP found for SP [%s].", serviceProvider.Name)
+		}
+	}
+	
+	// Count healthy IdPs
+	healthyIdPCount := 0
+	var firstHealthyIdP *IdentityProviderConfig
+	for i := range sp.Config.IdentityProviders {
+		if sp.Config.IdentityProviders[i].IsHealthy {
+			healthyIdPCount++
+			if firstHealthyIdP == nil {
+				firstHealthyIdP = &sp.Config.IdentityProviders[i]
 			}
 		}
 	}
 
-	// If we have a selected IdP (from SP-specific default or global default) or only one IdP configured, use it directly
-	if selectedIdP != nil || len(sp.Config.IdentityProviders) == 1 {
-		// Use selected IdP or the only IdP available if no default is set
-		if selectedIdP == nil {
-			selectedIdP = &sp.Config.IdentityProviders[0]
-			if sp.Config.Debug {
-				fmt.Printf("Using the only available IdP: %s (%s)\n", selectedIdP.Name, selectedIdP.ID)
-			}
-		}
+	// If no IdPs are healthy at all, return an error.
+	if healthyIdPCount == 0 {
+		log.Printf("CRITICAL: No healthy Identity Providers available for SP [%s]. Cannot proceed with authentication.", serviceProvider.Name)
+		http.Error(w, "No identity providers are currently available. Please try again later or contact support.", http.StatusServiceUnavailable)
+		return
+	}
 
+	// If a healthy default IdP (either SP-specific or global) was selected, use it.
+	if selectedIdP != nil { // selectedIdP being non-nil implies it's healthy from the logic above.
+		log.Printf("Proceeding with selected healthy default IdP [%s] for SP [%s].", selectedIdP.Name, serviceProvider.Name)
 		samlRequest.IdentityProvider = selectedIdP
-
-		// Make sure the relay state is set to the request ID so we can retrieve it later
 		samlRequest.RelayState = newRequestID
-
 		sp.forwardRequestToIdP(w, r, samlRequest)
 		return
 	}
 
-	// If there are multiple IdPs and no default is set, redirect to selection page
-	if sp.Config.Debug {
-		fmt.Printf("No default IdP found and multiple IdPs configured, redirecting to selection page\n")
-		fmt.Printf("Service Provider default IdP setting: '%s'\n", serviceProvider.DefaultIdP)
+	// If no default was chosen (either not configured, configured default is unhealthy, or no global default is healthy)
+	// AND there's exactly one healthy IdP overall, use that one.
+	if healthyIdPCount == 1 && firstHealthyIdP != nil {
+		log.Printf("No specific healthy default IdP found for SP [%s]. Using the only available healthy IdP: [%s].", serviceProvider.Name, firstHealthyIdP.Name)
+		selectedIdP = firstHealthyIdP
+		samlRequest.IdentityProvider = selectedIdP
+		samlRequest.RelayState = newRequestID
+		sp.forwardRequestToIdP(w, r, samlRequest)
+		return
+	}
 
+	// If there are multiple healthy IdPs and no suitable default has been chosen,
+	// or if the chosen default was unhealthy and no single healthy alternative exists,
+	// redirect to the selection page.
+	log.Printf("No specific healthy default IdP for SP [%s], or multiple healthy IdPs available (%d). Falling back to IdP selection page.", serviceProvider.Name, healthyIdPCount)
+	if sp.Config.Debug {
+		fmt.Printf("Redirecting to IdP selection page for SP [%s]. SP default: '%s', Healthy IdPs: %d\n",
+			serviceProvider.Name, serviceProvider.DefaultIdP, healthyIdPCount)
 		for i, idp := range sp.Config.IdentityProviders {
-			fmt.Printf("Available IdP #%d: %s (ID: '%s')\n", i, idp.Name, idp.ID)
+			fmt.Printf("  Available IdP #%d: %s (ID: '%s', Healthy: %t)\n", i, idp.Name, idp.ID, idp.IsHealthy)
 		}
 	}
 
