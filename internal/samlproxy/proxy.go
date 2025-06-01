@@ -1705,7 +1705,7 @@ func (sp *SAMLProxy) handleSAMLResponse(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Add subject if available from the original response
-	if samlResp.Assertion != nil && samlResp.Assertion.Subject != nil {
+	if samlResp.Assertion != nil && samlResp.Assertion.Subject != nil && samlResp.Assertion.Subject.NameID != nil {
 		assertion.Subject = &saml.Subject{
 			NameID: &saml.NameID{
 				Format:          samlResp.Assertion.Subject.NameID.Format,
