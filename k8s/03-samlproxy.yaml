@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: samlproxy
-  namespace: saml-tools
   labels:
     app: samlproxy
 spec:
@@ -84,7 +83,6 @@ apiVersion: v1
 kind: Service
 metadata:
   name: samlproxy
-  namespace: saml-tools
 spec:
   selector:
     app: samlproxy

@@ -213,7 +213,7 @@ jobs:
 
     - name: Deploy to Kubernetes
       run: |
-        # Apply configurations
+        # Apply configurations (no namespace needed - using default)
         kubectl apply -f k8s/01-configmaps-https.yaml
         kubectl apply -f k8s/02-samlidp.yaml
         kubectl apply -f k8s/03-samlproxy.yaml
