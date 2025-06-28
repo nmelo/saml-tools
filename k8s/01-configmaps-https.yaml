@@ -7,11 +7,11 @@ data:
   samlidp.yaml: |
     # SAML Identity Provider Configuration
     listen_addr: ":8085"
-    base_url: "https://idp.saml-tester.com"
+    base_url: "https://idp.idpbridge.com"
     cert_file: "/app/certs/idp/cert.pem"
     key_file: "/app/certs/idp/key.pem"
     session_secret: "idp-strong-secret-key-here"
-    entity_id: "https://idp.saml-tester.com/metadata"
+    entity_id: "https://idp.idpbridge.com/metadata"
     metadata_path: "/metadata"
     sso_service_path: "/sso"
     users:
@@ -43,19 +43,19 @@ data:
   samlproxy.yaml: |
     # SAML Proxy Configuration with Multiple IdPs
     listen_addr: ":8082"
-    base_url: "https://proxy.saml-tester.com"
+    base_url: "https://proxy.idpbridge.com"
     cert_file: "/app/certs/proxy/cert.pem"
     key_file: "/app/certs/proxy/key.pem"
     session_secret: "proxy-strong-secret-key-here"
-    proxy_entity_id: "https://proxy.saml-tester.com/metadata"
+    proxy_entity_id: "https://proxy.idpbridge.com/metadata"
     debug: true
 
     # Service Provider configurations
     service_providers:
       - name: "SAML Client"
         entity_id: "urn:samlclient:sp"
-        acs_url: "https://client.saml-tester.com/saml/acs"
-        metadata_xml_url: "https://client.saml-tester.com/saml/metadata"
+        acs_url: "https://client.idpbridge.com/saml/acs"
+        metadata_xml_url: "https://client.idpbridge.com/saml/metadata"
         attribute_map:
           "email": "email"
           "username": "username"
@@ -100,9 +100,9 @@ data:
         name: "Local Test IDP"
         description: "The local test identity provider"
         logo_url: "https://dummyimage.com/100x60/f5f2f5/0a1066.png&text=Test"
-        metadata_url: "https://idp.saml-tester.com/metadata"
-        entity_id: "https://idp.saml-tester.com/metadata"
-        sso_url: "https://idp.saml-tester.com/sso"
+        metadata_url: "https://idp.idpbridge.com/metadata"
+        entity_id: "https://idp.idpbridge.com/metadata"
+        sso_url: "https://idp.idpbridge.com/sso"
         default_idp: false
 
       - id: "bi-nmelo-okta"
@@ -130,11 +130,11 @@ data:
   samlclient.yaml: |
     # SAML Client Configuration
     listen_addr: ":8080"
-    base_url: "https://client.saml-tester.com"
+    base_url: "https://client.idpbridge.com"
     cert_file: "/app/certs/client/cert.pem"
     key_file: "/app/certs/client/key.pem"
     session_secret: "client-strong-secret-key-here"
     entity_id: "urn:samlclient:sp"
-    assertion_consumer_service_url: "https://client.saml-tester.com/saml/acs"
+    assertion_consumer_service_url: "https://client.idpbridge.com/saml/acs"
     metadata_path: "/saml/metadata"
-    idp_metadata_url: "https://proxy.saml-tester.com/metadata"
+    idp_metadata_url: "https://proxy.idpbridge.com/metadata"

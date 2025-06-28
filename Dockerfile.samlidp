@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 golang:1.24-alpine AS builder
+FROM --platform=linux/arm64 golang:1.24-alpine AS builder
 
 WORKDIR /app
 
@@ -21,9 +21,9 @@ COPY pkg/ ./pkg/
 
 # Build the application with specific architecture
 RUN echo "Building version: ${VERSION}, build time: ${BUILD_TIME}"
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/samlidp ./cmd/samlidp
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o bin/samlidp ./cmd/samlidp
 
-FROM --platform=linux/amd64 alpine:latest
+FROM --platform=linux/arm64 alpine:latest
 
 WORKDIR /app
 

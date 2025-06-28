@@ -1,0 +1,189 @@
+name: Deploy to AWS EKS
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY_PREFIX: saml-tools
+  EKS_CLUSTER_NAME: saml-tools-cluster
+  
+jobs:
+  build-and-push:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build and push SAML IdP
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.samlidp
+        platforms: linux/arm64
+        push: true
+        tags: |
+          ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_PREFIX }}-samlidp:latest
+          ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_PREFIX }}-samlidp:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Build and push SAML Proxy
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.samlproxy
+        platforms: linux/arm64
+        push: true
+        tags: |
+          ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_PREFIX }}-samlproxy:latest
+          ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_PREFIX }}-samlproxy:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Build and push SAML Client
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.samlclient
+        platforms: linux/arm64
+        push: true
+        tags: |
+          ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_PREFIX }}-samlclient:latest
+          ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_PREFIX }}-samlclient:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to EKS
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+
+    - name: Update Kubernetes manifests with new image tags
+      run: |
+        # Update image references in deployment files
+        ECR_REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+        IMAGE_TAG="${{ github.sha }}"
+        
+        # Update samlidp deployment
+        sed -i "s|image: .*samlidp:.*|image: ${ECR_REGISTRY}/${ECR_REPOSITORY_PREFIX}-samlidp:${IMAGE_TAG}|g" k8s/02-samlidp.yaml
+        
+        # Update samlproxy deployment
+        sed -i "s|image: .*samlproxy:.*|image: ${ECR_REGISTRY}/${ECR_REPOSITORY_PREFIX}-samlproxy:${IMAGE_TAG}|g" k8s/03-samlproxy.yaml
+        
+        # Update samlclient deployment
+        sed -i "s|image: .*samlclient:.*|image: ${ECR_REGISTRY}/${ECR_REPOSITORY_PREFIX}-samlclient:${IMAGE_TAG}|g" k8s/04-samlclient.yaml
+
+    - name: Deploy to Kubernetes
+      run: |
+        # Apply configurations
+        kubectl apply -f k8s/01-configmaps-https.yaml
+        kubectl apply -f k8s/02-samlidp.yaml
+        kubectl apply -f k8s/03-samlproxy.yaml
+        kubectl apply -f k8s/04-samlclient.yaml
+        kubectl apply -f k8s/05-ingress-idpbridge-https.yaml
+        
+        # Wait for deployments to be ready
+        kubectl rollout status deployment/samlidp --timeout=5m
+        kubectl rollout status deployment/samlproxy --timeout=5m
+        kubectl rollout status deployment/samlclient --timeout=5m
+
+    - name: Verify deployment
+      run: |
+        echo "Checking deployment status..."
+        kubectl get deployments
+        kubectl get pods
+        kubectl get ingress
+        
+        echo "Service URLs:"
+        echo "- SAML Client: https://client.idpbridge.com"
+        echo "- SAML Proxy: https://proxy.idpbridge.com"
+        echo "- SAML IdP: https://idp.idpbridge.com"
+
+  test-deployment:
+    name: Test Deployment
+    needs: deploy
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Test service endpoints
+      run: |
+        # Wait for services to be fully ready
+        sleep 30
+        
+        # Test each endpoint
+        echo "Testing SAML Client endpoint..."
+        curl -f -s -o /dev/null -w "%{http_code}" https://client.idpbridge.com || echo "Client endpoint not ready yet"
+        
+        echo "Testing SAML Proxy endpoint..."
+        curl -f -s -o /dev/null -w "%{http_code}" https://proxy.idpbridge.com || echo "Proxy endpoint not ready yet"
+        
+        echo "Testing SAML IdP endpoint..."
+        curl -f -s -o /dev/null -w "%{http_code}" https://idp.idpbridge.com || echo "IdP endpoint not ready yet"
+
+    - name: Slack notification
+      if: always()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        text: |
+          Deployment to AWS EKS ${{ job.status }}
+          Branch: ${{ github.ref }}
+          Commit: ${{ github.sha }}
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      continue-on-error: true

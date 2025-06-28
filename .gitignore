@@ -39,11 +39,24 @@ Thumbs.db
 .env.*
 !.env.example
 
-# SSL certificate files
+# SSL certificate files and keys
 *.pem
+*.key
+*.crt
+*.cer
+*.pfx
+*.p12
+
+# AWS and cloud credentials
+*-credentials.txt
+aws-credentials
+.aws/credentials
+.aws/config
 
 # Local configuration files that shouldn't be committed
 **/local_config.yaml
+**/local-*.yaml
+**/config.local.yaml
 
 # Kubernetes secret files containing certificates
 k8s/client-certs-secret.yaml

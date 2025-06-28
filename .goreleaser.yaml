@@ -1,0 +1,124 @@
+# .goreleaser.yaml
+project_name: saml-tools
+
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+builds:
+  - id: samlidp
+    binary: samlidp
+    main: ./cmd/samlidp
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+  - id: samlproxy
+    binary: samlproxy
+    main: ./cmd/samlproxy
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+  - id: samlclient
+    binary: samlclient
+    main: ./cmd/samlclient
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - configs/*.yaml
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - 'typo'
+      - 'README'
+  groups:
+    - title: 'Features'
+      regexp: "^.*feat[(\\w)]*:+.*$"
+    - title: 'Bug Fixes'
+      regexp: "^.*fix[(\\w)]*:+.*$"
+    - title: 'Performance'
+      regexp: "^.*perf[(\\w)]*:+.*$"
+    - title: 'Refactoring'
+      regexp: "^.*refactor[(\\w)]*:+.*$"
+
+release:
+  github:
+    owner: nmelo
+    name: saml-tools
+  draft: false
+  prerelease: auto
+  mode: append
+  header: |
+    ## SAML Tools Release {{ .Tag }}
+    
+    A comprehensive SAML testing toolkit for identity providers, service providers, and proxies.
+  footer: |
+    ## Docker Images
+    
+    Docker images are available at:
+    ```bash
+    docker pull ghcr.io/nmelo/saml-tools/samlidp:{{ .Tag }}
+    docker pull ghcr.io/nmelo/saml-tools/samlproxy:{{ .Tag }}
+    docker pull ghcr.io/nmelo/saml-tools/samlclient:{{ .Tag }}
+    ```
+    
+    ## Deployment
+    
+    For deployment instructions, see the [deployment documentation](https://github.com/nmelo/saml-tools/blob/main/README.md#deployment).
+
+# Announce releases to Discord/Slack (optional)
+announce:
+  skip: true

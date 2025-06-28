@@ -1,9 +1,16 @@
-.PHONY: all build clean test run-all run-proxy run-idp run-client setup-certs docker docker-push
+.PHONY: all build clean test run-all run-proxy run-idp run-client setup-certs docker docker-push aws-deploy aws-deploy-quick
 
 # Variables
 REGISTRY ?= docker.io/nmelo
 VERSION ?= latest
 GO_MODULE = github.com/nmelo/saml-tools
+
+# AWS Variables
+AWS_PROFILE ?= default
+AWS_REGION ?= us-east-1
+AWS_ACCOUNT_ID ?= $(shell aws sts get-caller-identity --profile $(AWS_PROFILE) --query Account --output text)
+ECR_REGISTRY ?= $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+ECR_REPO_PREFIX ?= saml-tools
 
 # Build all components
 all: build
@@ -88,3 +95,31 @@ k8s-deploy-tls:
 	kubectl apply -f k8s/03-samlproxy.yaml
 	kubectl apply -f k8s/04-samlclient.yaml
 	kubectl apply -f k8s/05-ingress-tls.yaml
+
+# AWS ECR login
+aws-ecr-login:
+	aws ecr get-login-password --profile $(AWS_PROFILE) --region $(AWS_REGION) | docker login --username AWS --password-stdin $(ECR_REGISTRY)
+
+# Build and push Docker images to AWS ECR
+aws-docker: aws-ecr-login
+	docker build -t $(ECR_REGISTRY)/$(ECR_REPO_PREFIX)/samlproxy:$(VERSION) -f Dockerfile.samlproxy .
+	docker build -t $(ECR_REGISTRY)/$(ECR_REPO_PREFIX)/samlidp:$(VERSION) -f Dockerfile.samlidp .
+	docker build -t $(ECR_REGISTRY)/$(ECR_REPO_PREFIX)/samlclient:$(VERSION) -f Dockerfile.samlclient .
+	docker push $(ECR_REGISTRY)/$(ECR_REPO_PREFIX)/samlproxy:$(VERSION)
+	docker push $(ECR_REGISTRY)/$(ECR_REPO_PREFIX)/samlidp:$(VERSION)
+	docker push $(ECR_REGISTRY)/$(ECR_REPO_PREFIX)/samlclient:$(VERSION)
+
+# Full AWS deployment (runs the deployment script)
+aws-deploy:
+	AWS_PROFILE=$(AWS_PROFILE) AWS_REGION=$(AWS_REGION) ./deploy-to-aws.sh
+
+# Quick AWS deployment (assumes infrastructure exists)
+aws-deploy-quick: aws-docker
+	kubectl apply -f k8s/00-namespace.yaml
+	kubectl apply -f k8s/01-configmaps-https.yaml
+	@for file in k8s/02-samlidp.yaml k8s/03-samlproxy.yaml k8s/04-samlclient.yaml; do \
+		sed "s|image: .*samlidp:latest|image: $(ECR_REGISTRY)/$(ECR_REPO_PREFIX)/samlidp:latest|g; \
+		     s|image: .*samlproxy:latest|image: $(ECR_REGISTRY)/$(ECR_REPO_PREFIX)/samlproxy:latest|g; \
+		     s|image: .*samlclient:latest|image: $(ECR_REGISTRY)/$(ECR_REPO_PREFIX)/samlclient:latest|g" $$file | kubectl apply -f -; \
+	done
+	kubectl apply -f k8s/05-ingress-aws-alb.yaml

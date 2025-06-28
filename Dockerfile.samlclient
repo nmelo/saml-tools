@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 golang:1.24-alpine AS builder
+FROM --platform=linux/arm64 golang:1.24-alpine AS builder
 
 WORKDIR /app
 
@@ -12,9 +12,9 @@ COPY internal/ ./internal/
 COPY pkg/ ./pkg/
 
 # Build the application with specific architecture
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/samlclient ./cmd/samlclient
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o bin/samlclient ./cmd/samlclient
 
-FROM --platform=linux/amd64 alpine:latest
+FROM --platform=linux/arm64 alpine:latest
 
 WORKDIR /app
 

@@ -100,6 +100,16 @@ identity_providers:
     metadata_url: "https://byndid-shibboleth.com/idp/shibboleth"
     entity_id: "https://byndid-shibboleth.com/idp"
     sso_url: "https://byndid-shibboleth.com/idp/profile/SAML2/POST/SSO"
+    authn_context_class_ref: "urn:oasis:names:tc:SAML:2.0:ac:classes:unspecified"
+
+  - id: "demo-adfs"
+    name: "ADFS"
+    description: "ADFS Demo tenant"
+    logo_url: "https://www.icontechnicalgroup.com//wp-content/uploads/2017/09/ShibbolethLogo.png"
+    metadata_url: "https://ec2amaz-8c8qrmr.byndid-mail.com/FederationMetadata/2007-06/FederationMetadata.xml"
+    entity_id: "https://EC2AMAZ-8C8QRMR.byndid-mail.com/adfs/services/trust"
+    sso_url: "https://EC2AMAZ-8C8QRMR.byndid-mail.com/adfs/ls"
+    authn_context_class_ref: "urn:oasis:names:tc:SAML:2.0:ac:classes:unspecified"
 
   - id: "test-idp"
     name: "Test IDP"
@@ -109,3 +119,4 @@ identity_providers:
     entity_id: "http://samlidp:8085/metadata"
     sso_url: "http://samlidp:8085/sso"
     default_idp: false
+    authn_context_class_ref: "urn:oasis:names:tc:SAML:2.0:ac:classes:unspecified"

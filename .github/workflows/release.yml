@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  GO_VERSION: '1.22'
+  REGISTRY: ghcr.io
+
+jobs:
+  release-binaries:
+    name: Release Binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Run GoReleaser
+      uses: goreleaser/goreleaser-action@v5
+      with:
+        distribution: goreleaser
+        version: latest
+        args: release --clean
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-docker:
+    name: Release Docker Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        component: [samlidp, samlproxy, samlclient]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.component }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+          type=sha
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.${{ matrix.component }}
+        platforms: linux/arm64,linux/amd64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  deploy-release:
+    name: Deploy Release to Production
+    needs: [release-binaries, release-docker]
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --name saml-tools-cluster --region us-east-1
+
+    - name: Deploy release
+      run: |
+        # Get the version from the tag
+        VERSION=${GITHUB_REF#refs/tags/}
+        
+        # Update deployments with the new version
+        kubectl set image deployment/samlidp samlidp=ghcr.io/${{ github.repository }}/samlidp:${VERSION}
+        kubectl set image deployment/samlproxy samlproxy=ghcr.io/${{ github.repository }}/samlproxy:${VERSION}
+        kubectl set image deployment/samlclient samlclient=ghcr.io/${{ github.repository }}/samlclient:${VERSION}
+        
+        # Wait for rollout
+        kubectl rollout status deployment/samlidp --timeout=5m
+        kubectl rollout status deployment/samlproxy --timeout=5m
+        kubectl rollout status deployment/samlclient --timeout=5m
+
+    - name: Create release notes
+      uses: softprops/action-gh-release@v1
+      with:
+        body: |
+          ## Docker Images
+          
+          This release includes Docker images for all components:
+          - `ghcr.io/${{ github.repository }}/samlidp:${{ github.ref_name }}`
+          - `ghcr.io/${{ github.repository }}/samlproxy:${{ github.ref_name }}`
+          - `ghcr.io/${{ github.repository }}/samlclient:${{ github.ref_name }}`
+          
+          ## Deployment
+          
+          The release has been automatically deployed to:
+          - https://idp.idpbridge.com
+          - https://proxy.idpbridge.com
+          - https://client.idpbridge.com
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

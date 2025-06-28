@@ -75,14 +75,15 @@ type ServiceProviderConfig struct {
 
 // IdentityProviderConfig represents configuration for an identity provider
 type IdentityProviderConfig struct {
-	ID             string `yaml:"id"`              // Unique identifier for this IdP
-	Name           string `yaml:"name"`            // Display name for the IdP
-	Description    string `yaml:"description"`     // Description to show in the selection UI
-	LogoURL        string `yaml:"logo_url"`        // Optional logo URL for the IdP
-	MetadataURL    string `yaml:"metadata_url"`    // URL to fetch IdP metadata
-	EntityID       string `yaml:"entity_id"`       // Entity ID of the IdP
-	SSOURL         string `yaml:"sso_url"`         // Single Sign-On URL of the IdP
-	DefaultIdP     bool   `yaml:"default_idp"`     // Whether this is the default IdP
+	ID                     string `yaml:"id"`                        // Unique identifier for this IdP
+	Name                   string `yaml:"name"`                      // Display name for the IdP
+	Description            string `yaml:"description"`               // Description to show in the selection UI
+	LogoURL                string `yaml:"logo_url"`                  // Optional logo URL for the IdP
+	MetadataURL            string `yaml:"metadata_url"`              // URL to fetch IdP metadata
+	EntityID               string `yaml:"entity_id"`                 // Entity ID of the IdP
+	SSOURL                 string `yaml:"sso_url"`                   // Single Sign-On URL of the IdP
+	DefaultIdP             bool   `yaml:"default_idp"`               // Whether this is the default IdP
+	AuthnContextClassRef   string `yaml:"authn_context_class_ref"`   // Optional authentication context class reference
 }
 
 // NewSAMLProxy creates a new SAML proxy from the given configuration file
@@ -1345,6 +1346,14 @@ func (sp *SAMLProxy) forwardRequestToIdP(w http.ResponseWriter, r *http.Request,
 		},
 	}
 
+	// Add RequestedAuthnContext if specified in IdP configuration
+	if samlRequest.IdentityProvider.AuthnContextClassRef != "" {
+		newAuthnRequest.RequestedAuthnContext = &saml.RequestedAuthnContext{
+			Comparison:           "exact",
+			AuthnContextClassRef: samlRequest.IdentityProvider.AuthnContextClassRef,
+		}
+	}
+
 	// Debug logging
 	if sp.Config.Debug {
 		fmt.Printf("Sending SAML request to IdP %s:\n", samlRequest.IdentityProvider.Name)
@@ -1353,6 +1362,11 @@ func (sp *SAMLProxy) forwardRequestToIdP(w http.ResponseWriter, r *http.Request,
 		fmt.Printf("  IssueInstant: %s\n", newAuthnRequest.IssueInstant.Format(time.RFC3339))
 		fmt.Printf("  Destination: %s\n", newAuthnRequest.Destination)
 		fmt.Printf("  ACS URL: %s\n", newAuthnRequest.AssertionConsumerServiceURL)
+		if newAuthnRequest.RequestedAuthnContext != nil {
+			fmt.Printf("  RequestedAuthnContext: %s (Comparison: %s)\n", 
+				newAuthnRequest.RequestedAuthnContext.AuthnContextClassRef,
+				newAuthnRequest.RequestedAuthnContext.Comparison)
+		}
 	}
 
 	// Sign the request
@@ -1838,6 +1852,18 @@ func (sp *SAMLProxy) signRequest(request *saml.AuthnRequest) ([]byte, error) {
 		}
 		if request.NameIDPolicy.AllowCreate != nil {
 			nameIDPolicyEl.CreateAttr("AllowCreate", fmt.Sprintf("%t", *request.NameIDPolicy.AllowCreate))
+		}
+	}
+
+	// Add RequestedAuthnContext if present
+	if request.RequestedAuthnContext != nil {
+		requestedAuthnContextEl := authnRequestEl.CreateElement("saml2p:RequestedAuthnContext")
+		if request.RequestedAuthnContext.Comparison != "" {
+			requestedAuthnContextEl.CreateAttr("Comparison", request.RequestedAuthnContext.Comparison)
+		}
+		if request.RequestedAuthnContext.AuthnContextClassRef != "" {
+			authnContextClassRefEl := requestedAuthnContextEl.CreateElement("saml2:AuthnContextClassRef")
+			authnContextClassRefEl.SetText(request.RequestedAuthnContext.AuthnContextClassRef)
 		}
 	}
 
