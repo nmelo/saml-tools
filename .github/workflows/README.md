@@ -4,32 +4,27 @@ This directory contains GitHub Actions workflows for CI/CD automation of the SAM
 
 ## Workflows
 
-### 1. Build and Test (`build-and-test.yml`)
+### 1. CI/CD Pipeline (`ci-cd.yml`)
+
+A comprehensive workflow that combines continuous integration and deployment.
 
 Triggers on:
 - Push to `main` or `develop` branches
 - Pull requests to `main` or `develop` branches
+- Manual workflow dispatch with environment selection
 
 Actions:
 - **Lint**: Runs golangci-lint for code quality
 - **Test**: Runs all unit tests with race detection and coverage
-- **Build**: Builds binaries for multiple platforms (linux/darwin, amd64/arm64)
-- **Docker Build**: Builds Docker images for all components
 - **Security Scan**: Runs Trivy and gosec for vulnerability scanning
-
-### 2. Deploy to AWS (`deploy-to-aws.yml`)
-
-Triggers on:
-- Push to `main` branch
-- Manual workflow dispatch with environment selection
-
-Actions:
 - **Build and Push**: Builds ARM64 Docker images and pushes to AWS ECR
-- **Deploy**: Updates EKS deployments with new images
+- **Deploy**: Updates EKS deployments with new images (only on main branch)
 - **Test Deployment**: Verifies service endpoints are accessible
 - **Notifications**: Sends Slack notifications on completion
 
-### 3. Release (`release.yml`)
+The workflow runs all CI steps on every push/PR, but only deploys to AWS when pushing to the main branch.
+
+### 2. Release (`release.yml`)
 
 Triggers on:
 - Push of version tags (e.g., `v1.0.0`)
